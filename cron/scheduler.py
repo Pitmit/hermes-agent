@@ -1789,6 +1789,17 @@ def _final_response_from_result(result: dict, job_id: str, job_name: str, AIAgen
             job_name)
 
     final_response = result.get("final_response", "") or ""
+    # A cron agent can complete its model turn while explicitly reporting that
+    # the requested work did not complete. Treat these machine-readable failure
+    # markers as run failures instead of recording a misleading last_status=ok.
+    # [SILENT] and ordinary prose remain unchanged.
+    _failure_marker = re.compile(
+        r"^\s*(?:FEHLGESCHLAGEN\s*:|NO[- ]GO\s*:|FAIL(?:ED)?\s*:|"
+        r"\{\s*[\"']status[\"']\s*:\s*[\"'](?:NO[- ]GO|FAIL(?:ED)?|ERROR)[\"'])",
+        re.IGNORECASE,
+    )
+    if _failure_marker.search(final_response):
+        raise RuntimeError(f"agent reported task failure: {final_response[:500]}")
     # Repair model-mangled computer_use media paths before delivery (fail-open, as in gateway).
     if final_response:
         from gateway.media_repair import repair_explicit_computer_use_media_paths
