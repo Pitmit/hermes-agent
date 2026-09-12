@@ -30,11 +30,19 @@ _MD_LIST_ITEM_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+", flags=re.MULTILINE)
 _MD_HR_RE = re.compile(r"^\s*[-*_]{3,}\s*$", flags=re.MULTILINE)
 _MD_TABLE_PIPE_RE = re.compile(r"\s*\|\s*")
 _URL_RE = re.compile(r"https?://\S+")
-# Local file links ("MEDIA:/Users/me/file.xlsx") are click targets on screen, not
-# speech: voices loop on the hyphenated slug ("eeeeee"). The token is silence; the
-# assistant's prose already says "the files are below". Trailing sentence
-# punctuation is left in place so "see MEDIA:/x.py. Then" keeps its full stop.
-_MEDIA_PATH_RE = re.compile(r"MEDIA:\S+?(?=[.,;:!?)\]]*(?:\s|$))")
+# MEDIA:<path> is attachment syntax, not speech. Match only real path anchors
+# (~, /, or X:\\), including quoted paths with spaces; a prose phrase such as
+# ``MEDIA: strategy`` must survive. Sentence punctuation remains outside the
+# match so ``See MEDIA:/tmp/x.pdf. Then`` keeps its full stop.
+_MEDIA_PATH_RE = re.compile(
+    r'''[`"'*_]{0,3}MEDIA:\s*'''
+    r'''(?:`(?:~/|/|[A-Za-z]:[/\\])[^`\n]+?\.[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9_-])?`|'''
+    r'''"(?:~/|/|[A-Za-z]:[/\\])[^"\n]+?\.[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9_-])?"|'''
+    r'''\'(?:~/|/|[A-Za-z]:[/\\])[^\'\n]+?\.[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9_-])?\'|'''
+    r'''(?:~/|/|[A-Za-z]:[/\\])\S+?\.[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9_-])?)'''
+    r'''(?=[\s`"'*_,;:)\]}\[]|MEDIA:|[.!?](?:\s|$)|$)[`"'*_]{0,3}''',
+    re.IGNORECASE,
+)
 
 _DEGREE_UNITS = (("C", "Celsius"), ("F", "Fahrenheit"))
 # Unit suffix (regex, after a digit) -> spoken word; km/h variants before the bare "m".
