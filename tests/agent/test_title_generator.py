@@ -19,6 +19,15 @@ from agent.title_generator import (
 from hermes_state import SessionDB
 
 
+class TestDerivedTitle:
+    def test_reply_context_wrapper_is_not_titleable(self):
+        opener = (
+            '[Replying to: "Cronjob Response: media-inbox-mirror"]\n\n'
+            'Reparieren'
+        )
+        assert is_titleable_user_message(opener) is False
+
+
 class TestGenerateTitle:
     """Unit tests for generate_title()."""
 
