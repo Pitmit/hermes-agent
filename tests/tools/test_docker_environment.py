@@ -82,6 +82,21 @@ def test_ensure_docker_available_logs_and_raises_when_not_found(monkeypatch, cap
     )
 
 
+def test_unsupported_disk_quota_warns_once_per_process(monkeypatch, caplog):
+    """Repeated environment construction must not flood errors.log with the same host fact."""
+    docker_env._storage_opt_warning_emitted = False
+    monkeypatch.setattr(docker_env, "_cgroup_limits_available", lambda image: True)
+    monkeypatch.setattr(docker_env.DockerEnvironment, "_storage_opt_supported", lambda self: False)
+    env = object.__new__(docker_env.DockerEnvironment)
+
+    with caplog.at_level(logging.WARNING, logger="tools.environments.docker"):
+        env._resource_args("python:3.11", 0, 0, 1024, True, "1g", [])
+        env._resource_args("python:3.11", 0, 0, 1024, True, "1g", [])
+
+    messages = [record.getMessage() for record in caplog.records if "disk limits" in record.getMessage()]
+    assert len(messages) == 1
+
+
 def test_auto_mount_host_cwd_adds_volume(monkeypatch, tmp_path):
     """Opt-in docker cwd mounting should bind the host cwd to /workspace."""
     project_dir = tmp_path / "my-project"
