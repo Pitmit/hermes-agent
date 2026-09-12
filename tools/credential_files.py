@@ -207,7 +207,17 @@ def _safe_skills_path(skills_dir: Path) -> str:
     """Return *skills_dir* if symlink-free, else a sanitized temp copy (same exclusions as sync)."""
     global _safe_skills_tempdir
 
-    symlinks = [p for p in skills_dir.rglob("*") if p.is_symlink()]
+    # Match the sanitized-copy walk: dependency/cache trees are never mounted,
+    # so their ordinary venv/node symlinks must neither trigger a full copy nor
+    # flood the warning log.
+    symlinks = []
+    for dirpath, dirnames, filenames in os.walk(skills_dir):
+        base = Path(dirpath)
+        symlinks.extend(p for p in (base / name for name in dirnames + filenames) if p.is_symlink())
+        dirnames[:] = sorted(
+            name for name in dirnames
+            if name not in EXCLUDED_SKILL_DIRS and not (base / name).is_symlink()
+        )
     if not symlinks:
         return str(skills_dir)
     for link in symlinks:

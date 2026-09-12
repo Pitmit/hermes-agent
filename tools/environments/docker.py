@@ -349,6 +349,7 @@ def _resolve_host_user_spec() -> Optional[str]:
 
 
 _storage_opt_ok: Optional[bool] = None  # cached result across instances
+_storage_opt_warning_emitted = False
 _cgroup_limits_ok: Optional[bool] = None  # cached result across instances
 
 
@@ -647,9 +648,12 @@ class DockerEnvironment(BaseEnvironment):
             if self._storage_opt_supported():
                 args.extend(["--storage-opt", f"size={disk}m"])
             else:
-                logger.warning(
-                    "Docker storage driver does not support per-container disk limits "
-                    "(requires overlay2 on XFS with pquota). Container will run without disk quota.")
+                global _storage_opt_warning_emitted
+                if not _storage_opt_warning_emitted:
+                    _storage_opt_warning_emitted = True
+                    logger.warning(
+                        "Docker storage driver does not support per-container disk limits "
+                        "(requires overlay2 on XFS with pquota). Container will run without disk quota.")
         if not network:
             extra_network = _extra_args_network_mode(extra_args)
             if extra_network is None:
