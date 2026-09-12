@@ -177,11 +177,31 @@ _THINK_BLOCK_OPEN_RE = re.compile(r"<think[\s>].*\Z", flags=re.DOTALL | re.IGNOR
 _VERIFIER_FOOTER_RE = re.compile(r"^\s*⚠️?\s*File-mutation verifier:.*(?:\n[ \t]+•.*)*", flags=re.MULTILINE)
 
 
+# MEDIA:<path> delivery directives are core attachment syntax that the gateway
+# parses out of the SHARED final assistant text.  They must never be spoken, but
+# must NOT be stripped from the deliverable text itself — doing that in a
+# transform_llm_output hook removed the tags before the gateway's attachment
+# extractor ran and silently broke ALL file/image delivery (2026-08-21; see
+# pscs-local-patches references/reapply-manifest.md "Patch F").  The strip
+# therefore lives here, in the TTS-only spoken-text path.  Path-anchored
+# (requires ~/, /, or an X:\ drive path) so a bare "MEDIA:" word in prose is
+# left alone.
+_MEDIA_TAG_RE = re.compile(
+    r'''[`"'*_]{0,3}MEDIA:\s*'''
+    r'''(?:`(?:~/|/|[A-Za-z]:[/\\])[^`\n]+?\.[A-Za-z0-9][A-Za-z0-9._-]*`|'''
+    r'''"(?:~/|/|[A-Za-z]:[/\\])[^"\n]+?\.[A-Za-z0-9][A-Za-z0-9._-]*"|'''
+    r'''\'(?:~/|/|[A-Za-z]:[/\\])[^\'\n]+?\.[A-Za-z0-9][A-Za-z0-9._-]*\'|'''
+    r'''(?:~/|/|[A-Za-z]:[/\\])\S+?\.[A-Za-z0-9][A-Za-z0-9._-]*)'''
+    r'''(?=[\s`"'*_,;:)\]}\[]|MEDIA:|\.(?:\s|$)|$)[`"'*_]{0,3}\.?''',
+    re.IGNORECASE,
+)
+
+
 def strip_nonspoken_blocks(text: str) -> str:
     """Remove ``<think>`` reasoning blocks and the file-mutation verifier footer."""
     if not text:
         return ""
-    for pattern in (_THINK_BLOCK_RE, _THINK_BLOCK_OPEN_RE, _VERIFIER_FOOTER_RE):
+    for pattern in (_THINK_BLOCK_RE, _THINK_BLOCK_OPEN_RE, _VERIFIER_FOOTER_RE, _MEDIA_TAG_RE):
         text = pattern.sub(" ", text)
     return text
 
