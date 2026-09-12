@@ -16,6 +16,7 @@ import pytest
 
 from hermes_state import SessionDB
 from tools.session_search_tool import (
+    SESSION_SEARCH_SCHEMA,
     _format_timestamp,
     _is_compacted_message,
     _resolve_to_parent,
@@ -256,6 +257,25 @@ class TestDiscoveryShape:
             r["match_message_id"] for r in full["results"]
         ]
         assert len(adaptive_json.encode("utf-8")) < len(full_json.encode("utf-8")) * 0.6
+
+    def test_index_detail_contract_for_fts_and_title_hits(self, db):
+        _seed_modpack_sessions(db)
+        expected = {"session_id", "title", "when", "snippet", "match_message_id"}
+        assert SESSION_SEARCH_SCHEMA["parameters"]["properties"]["detail"]["enum"] == [
+            "adaptive", "full", "index",
+        ]
+
+        fts = json.loads(session_search(query="modpack", limit=3, detail="index", db=db))
+        assert fts["success"] is True and fts["detail"] == "index"
+        assert len(fts["results"]) == 3
+        assert all(set(hit) == expected for hit in fts["results"])
+
+        title = json.loads(session_search(
+            query="Modpack Mob Spawn Fix", limit=1, detail="index", db=db,
+        ))
+        assert title["count"] == 1
+        assert set(title["results"][0]) == expected
+        assert title["results"][0]["match_message_id"] is not None
 
 
     def test_current_session_filtered_out(self, db):
