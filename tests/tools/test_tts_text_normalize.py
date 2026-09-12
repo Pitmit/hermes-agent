@@ -1,6 +1,6 @@
 from gateway.config import Platform, PlatformConfig
 from gateway.platforms.base import BasePlatformAdapter
-from tools.tts_text_normalize import prepare_spoken_text
+from tools.tts_text_normalize import prepare_spoken_text, strip_nonspoken_blocks
 
 
 class _DummyAdapter(BasePlatformAdapter):
@@ -47,3 +47,23 @@ def test_prepare_spoken_text_polish_edge_cases():
     assert "and/or" in prepare_spoken_text("choose and/or option")
     assert "N/A" in prepare_spoken_text("status N/A here")
     assert "2026/06/02" in prepare_spoken_text("due 2026/06/02 ok")
+
+
+def test_prepare_spoken_text_strips_media_delivery_tags():
+    """MEDIA:<path> delivery directives must never reach the speech provider.
+
+    Regression guard for Patch F (2026-08-21): the strip lives in the TTS-only
+    spoken-text path (strip_nonspoken_blocks), NOT in a transform_llm_output
+    hook — stripping there removed the tags before the gateway's attachment
+    extractor ran and silently broke all file/image delivery.
+    """
+    # Absolute, home-anchored and Windows-drive paths are all stripped.
+    assert "MEDIA:" not in prepare_spoken_text("Here is the report MEDIA:/home/hermes/report.pdf")
+    assert "MEDIA:" not in prepare_spoken_text("Your file MEDIA:~/voice-memos/out.ogg is ready")
+    assert "MEDIA:" not in strip_nonspoken_blocks("done MEDIA:C:\\Users\\p\\deck.pptx")
+    assert prepare_spoken_text("Fertig MEDIA:/home/hermes/My_File.pdf danke") == "Fertig danke"
+    assert prepare_spoken_text('Fertig MEDIA:"/home/hermes/My File.pdf" danke') == "Fertig danke"
+    assert prepare_spoken_text("Fertig MEDIA:'/home/hermes/My File.pdf' danke") == "Fertig danke"
+    # Path-anchored: quoted and bare prose words are left untouched.
+    assert "MEDIA:" in prepare_spoken_text("discussing MEDIA: strategy for the campaign")
+    assert 'MEDIA:"strategy"' in prepare_spoken_text('discussing MEDIA:"strategy" for the campaign')
