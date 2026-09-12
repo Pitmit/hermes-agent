@@ -152,6 +152,22 @@ class TestSkillsDirectoryMount:
 
         assert mounts[0]["host_path"] == str(skills_dir)
 
+    def test_symlinks_in_excluded_dependency_dirs_do_not_trigger_sanitized_copy(self, tmp_path):
+        """A venv is never mounted, so its normal interpreter links are irrelevant."""
+        hermes_home = tmp_path / ".hermes"
+        skills_dir = hermes_home / "skills"
+        skill_dir = skills_dir / "cat" / "myskill"
+        (skill_dir / ".venv" / "bin").mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text("# skill")
+        target = tmp_path / "python"
+        target.write_text("binary")
+        (skill_dir / ".venv" / "bin" / "python").symlink_to(target)
+
+        with patch.dict(os.environ, {"HERMES_HOME": str(hermes_home)}):
+            mounts = get_skills_directory_mount()
+
+        assert mounts[0]["host_path"] == str(skills_dir)
+
 
 class TestIterSkillsFiles:
     def test_returns_files_skipping_symlinks(self, tmp_path):
