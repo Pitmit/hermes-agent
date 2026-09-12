@@ -107,6 +107,15 @@ class _FakeWebSocket:
 # ── _websocket_loop: read-idle watchdog (#98097) ──────────────────────────
 
 
+def test_read_idle_watchdog_is_last_resort_not_a_quiet_relay_timer():
+    """Buzz can remain frame-silent for 15+ minutes while healthy.
+
+    Ping/pong is the primary dead-link detector; the read bound is only a
+    CLOSE_WAIT escape hatch and must not churn a healthy quiet relay.
+    """
+    assert _buzz_mod._WS_READ_IDLE_TIMEOUT == 3600.0
+
+
 class _ScriptedWebSocket(_FakeWebSocket):
     """A connect() target whose event frames come from a scripted behavior.
 
