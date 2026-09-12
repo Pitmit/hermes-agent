@@ -15,12 +15,15 @@ from hermes_state import SessionDB
 
 
 class TestDerivedTitle:
-    def test_reply_context_wrapper_is_not_titleable(self):
-        opener = (
-            '[Replying to: "Cronjob Response: media-inbox-mirror"]\n\n'
-            'Reparieren'
-        )
-        assert is_titleable_user_message(opener) is False
+    @pytest.mark.parametrize(
+        "wrapper",
+        [
+            '[Replying to: "Cronjob Response: media-inbox-mirror"]',
+            '[Replying to your previous message: "Cronjob Response: media-inbox-mirror"]',
+        ],
+    )
+    def test_reply_context_wrapper_is_not_titleable(self, wrapper):
+        assert is_titleable_user_message(f"{wrapper}\n\nReparieren") is False
 
 
 class TestGenerateTitle:
