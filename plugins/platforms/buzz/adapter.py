@@ -146,7 +146,7 @@ _WS_AUTH_TIMEOUT = 20.0
 # The library keepalive (ping_interval/ping_timeout below) should catch a dead relay first, but a relay-side
 # close the transport never surfaces (observed as a CLOSE_WAIT socket with the loop parked on recv, #98097)
 # leaves the gateway "connected" while inbound stops; this timeout forces the normal reconnect path instead.
-_WS_READ_IDLE_TIMEOUT = 300.0
+_WS_READ_IDLE_TIMEOUT = 3600.0
 _WS_MAX_MESSAGE_BYTES = 2_000_000
 _WS_MEMBERSHIP_KIND = 44100  # Buzz channel-membership event — live DM discovery
 _WS_MEMBERSHIP_SUB_ID = "hermes-buzz-membership"
