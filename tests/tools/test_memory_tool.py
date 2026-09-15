@@ -771,6 +771,7 @@ class TestBackgroundReviewDeleteGate:
 
     def test_remove_staged_not_applied(self, store, tmp_path, monkeypatch):
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setattr("tools.write_approval.write_approval_enabled", lambda subsystem: True)
         store.add("memory", "never create records without permission")
         token = set_current_write_origin("background_review")
         try:
@@ -792,6 +793,7 @@ class TestBackgroundReviewDeleteGate:
 
     def test_replace_staged_in_background_review(self, store, tmp_path, monkeypatch):
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setattr("tools.write_approval.write_approval_enabled", lambda subsystem: True)
         store.add("memory", "entry the fork must not rewrite")
         token = set_current_write_origin("background_review")
         try:
@@ -804,7 +806,22 @@ class TestBackgroundReviewDeleteGate:
         # Fail-closed: the original entry is untouched.
         assert "entry the fork must not rewrite" in store._entries_for("memory")
 
+    def test_replace_applied_when_write_approval_off(self, store, monkeypatch):
+        monkeypatch.setattr("tools.write_approval.write_approval_enabled", lambda subsystem: False)
+        store.add("memory", "entry the fork may update automatically")
+        token = set_current_write_origin("background_review")
+        try:
+            result = json.loads(memory_tool(
+                action="replace", old_text="entry the fork may", content="updated automatically", store=store))
+        finally:
+            reset_current_write_origin(token)
+        assert result["success"] is True
+        assert result.get("staged") is not True
+        assert "entry the fork may update automatically" not in store._entries_for("memory")
+        assert "updated automatically" in store._entries_for("memory")
+
     def test_batch_containing_remove_staged_whole_batch(self, store, tmp_path, monkeypatch):
+        monkeypatch.setattr("tools.write_approval.write_approval_enabled", lambda subsystem: True)
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
         store.add("memory", "rule one")
         token = set_current_write_origin("background_review")
