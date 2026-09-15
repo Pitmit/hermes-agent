@@ -165,15 +165,17 @@ def destructive_ops(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 def _background_delete_gate(store, action, operations, target="memory", content=None,
                             old_text=None) -> Optional[str]:
-    """Fail-closed operation gate for unattended background-review forks (#105921): ``add``
-    stays available (it is all any review prompt asks for), while ``replace``/``remove`` —
-    single or inside a batch — are never applied unattended. The op is staged in the pending
-    store instead of merely denied: the fork's own review summary is never published back, so
-    a plain denial would drop the consolidation request with no surfacing path at all. A
-    staging failure fails closed to a plain denial."""
+    """Approval gate for unattended background-review consolidation (#105921).
+
+    The configured memory write-approval policy remains authoritative: when off,
+    automatic reviews apply updates directly; when on, destructive operations are
+    pinned to the reviewed entry and staged. A staging failure fails closed."""
     from tools.skill_provenance import is_unattended_review
 
     if not is_unattended_review():
+        return None
+    from tools.write_approval import MEMORY, write_approval_enabled
+    if not write_approval_enabled(MEMORY):
         return None
     payload = ({"action": "batch", "target": target, "operations": operations}
                if operations is not None else

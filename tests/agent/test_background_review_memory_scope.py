@@ -116,12 +116,10 @@ class TestExplicitRefineOrigin:
 
 
 class TestConsolidationProposalSurfaces:
-    """The fork's own review summary is never published back, so a consolidation the delete
-    gate staged must surface through ``summarize_background_review_actions`` — otherwise the
-    near-limit denial path drops both the requested update and the proposal, silently (#105921)."""
+    """When write approval is enabled, staged consolidation must surface through
+    ``summarize_background_review_actions``; with approval off, consolidation applies directly."""
 
     def _store(self, tmp_path, monkeypatch):
-        import json as _json
         from tools.memory_tool_store import MemoryStore
 
         monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
@@ -137,6 +135,7 @@ class TestConsolidationProposalSurfaces:
         from tools.skill_provenance import set_current_write_origin, reset_current_write_origin
 
         store = self._store(tmp_path, monkeypatch)
+        monkeypatch.setattr("tools.write_approval.write_approval_enabled", lambda subsystem: True)
         assert store.add("memory", "standing rule entry")["success"] is True
 
         token = set_current_write_origin("background_review")
@@ -156,18 +155,17 @@ class TestConsolidationProposalSurfaces:
         actions = bg.summarize_background_review_actions(review_messages, [])
         assert any("staged for your approval" in a for a in actions)
 
-    def test_near_limit_denial_end_to_end(self, tmp_path, monkeypatch):
-        """add rejected by the budget -> fork follows the 'consolidate now' hint with a
-        replace -> the delete gate stages it -> the proposal surfaces; the store never
-        changed and nothing was silently lost."""
+    def test_near_limit_consolidation_applies_when_approval_off(self, tmp_path, monkeypatch):
+        """With approval off, a review may follow the near-limit hint and consolidate
+        automatically, preserving the workflow configured by the user."""
         import json
 
         from tools.memory_tool import memory_tool
         from tools.skill_provenance import set_current_write_origin, reset_current_write_origin
 
         store = self._store(tmp_path, monkeypatch)
+        monkeypatch.setattr("tools.write_approval.write_approval_enabled", lambda subsystem: False)
         assert store.add("memory", "seed entry one")["success"] is True
-        # Near-limit: a further add is rejected and the store's hint says to consolidate.
         assert store.add("memory", "x" * 600)["success"] is False
 
         token = set_current_write_origin("background_review")
@@ -177,23 +175,9 @@ class TestConsolidationProposalSurfaces:
                 action="replace", old_text="seed entry one", content="merged entry", store=store)
         finally:
             reset_current_write_origin(token)
-        assert json.loads(add_raw)["success"] is False  # the budget still rejects the add
+        assert json.loads(add_raw)["success"] is False
         replace_result = json.loads(replace_raw)
-        assert replace_result["staged"] is True and replace_result["proposal_staged"] is True
-
-        # Fail-closed: nothing was applied or dropped.
-        assert "seed entry one" in store._entries_for("memory")
-        assert "merged entry" not in store._entries_for("memory")
-
-        review_messages = [
-            {"role": "assistant", "tool_calls": [
-                {"id": "c1", "function": {"name": "memory", "arguments": json.dumps(
-                    {"action": "add", "content": "y" * 600})}},
-                {"id": "c2", "function": {"name": "memory", "arguments": json.dumps(
-                    {"action": "replace", "old_text": "seed entry one", "content": "merged entry"})}},
-            ]},
-            {"role": "tool", "tool_call_id": "c1", "content": add_raw},
-            {"role": "tool", "tool_call_id": "c2", "content": replace_raw},
-        ]
-        actions = bg.summarize_background_review_actions(review_messages, [])
-        assert any("staged for your approval" in a for a in actions)
+        assert replace_result["success"] is True
+        assert replace_result.get("staged") is not True
+        assert "seed entry one" not in store._entries_for("memory")
+        assert "merged entry" in store._entries_for("memory")
