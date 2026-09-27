@@ -1575,18 +1575,18 @@ def test_connect_heals_reduced_tasks_schema_seeded_by_external_harness(kanban_ho
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_hermes_argv_prefers_module_form_over_path_shim(monkeypatch):
+def test_resolve_hermes_argv_prefers_installation_bound_command_over_path_shim(monkeypatch):
     """A `hermes` on PATH must not shadow the running install (#111569):
-    the module argv wins whenever ``hermes_cli`` is importable; only an
+    the installation-bound argv wins whenever ``hermes_cli`` is importable; only an
     explicit ``$HERMES_BIN`` overrides it."""
     import shutil
-    import sys
     from hermes_cli import kanban_db_dispatch as kbd
 
     monkeypatch.delenv("HERMES_BIN", raising=False)
     monkeypatch.setattr(shutil, "which", lambda name: "/tmp/planted/hermes")
     monkeypatch.setattr(kbd, "_safe_which_no_cwd", lambda name: "/tmp/planted/hermes")
-    assert kbd._resolve_hermes_argv() == [sys.executable, "-m", "hermes_cli.main"]
+    assert kbd._resolve_hermes_argv() == kbd._module_hermes_argv()
+    assert kbd._resolve_hermes_argv() != ["/tmp/planted/hermes"]
 
     monkeypatch.setenv("HERMES_BIN", "/opt/hermes/bin/hermes")
     assert kbd._resolve_hermes_argv() == ["/opt/hermes/bin/hermes"]
@@ -1594,14 +1594,14 @@ def test_resolve_hermes_argv_prefers_module_form_over_path_shim(monkeypatch):
 
 
 
-def test_resolve_hermes_argv_module_actually_runs():
-    """The fallback module name must be importable + runnable.
+def test_resolve_hermes_argv_installation_command_actually_runs():
+    """The installation-bound command must be importable + runnable.
 
-    A unit test that pins the literal string is necessary but not
-    sufficient — if `hermes_cli.main` ever loses `if __name__ == "__main__"`
-    handling or its argparse setup, `python -m hermes_cli.main --version`
-    would fail and so would every dispatcher spawn that hits the fallback.
-    Run it as a real subprocess to catch that regression.
+    Shape assertions are not sufficient: a published no-boot-through-venv
+    install uses a bare store Python where ``python -m hermes_cli.main`` is
+    not importable without the launcher's repo/dependency bootstrap.  Run the
+    resolved command as a real subprocess to catch that production-only
+    regression.
     """
     import subprocess
     from hermes_cli import kanban_db_dispatch as kbd
