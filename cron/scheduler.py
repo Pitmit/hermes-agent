@@ -3481,15 +3481,34 @@ def _launch_external_cron_worker(job: dict) -> bool:
     ack_path = handoff_dir / f"{execution_id}.ready"
     # Captured so a worker that dies before its acknowledgement can name the cause (#112729).
     stderr_path = handoff_dir / f"{execution_id}.stderr"
-    command = [
-        sys.executable,
-        "-m",
-        "cron.scheduler",
+    repo_root = Path(__file__).resolve().parent.parent
+    worker_args = [
         "--external-worker-file",
         str(payload_path),
         "--ack-file",
         str(ack_path),
     ]
+    command = [sys.executable, "-m", "cron.scheduler", *worker_args]
+    # A source-install launcher runs the gateway on bare store Python; hermes_bootstrap
+    # adds the selected dependency generation only to that process. A raw child using
+    # the same sys.executable therefore sees this checkout but not dependencies such as
+    # ruamel. Re-enter through the canonical runtime bootstrap when this process is the
+    # store interpreter. A selected/developer venv keeps the direct module path.
+    from hermes_cli._launchers import resolve_store_python, runtime_command
+    store_python = resolve_store_python(repo_root)
+    # Lexical identity is deliberate: a selected venv interpreter may symlink to
+    # the store binary but has its own sys.prefix and dependencies (#122513).
+    if (
+        store_python is not None
+        and os.path.normcase(os.path.abspath(store_python))
+        == os.path.normcase(os.path.abspath(sys.executable))
+    ):
+        command = runtime_command(
+            repo_root,
+            worker_args,
+            module="cron.scheduler",
+            python=store_python,
+        )
 
     from agent.secret_scope import (
         build_profile_secret_scope,
@@ -3569,10 +3588,10 @@ def _launch_external_cron_worker(job: dict) -> bool:
         "HERMES_EXEC_ASK",
     ):
         worker_env.pop(_presence_var, None)
-    # `-m cron.scheduler` has no hermes_cli.main bootstrap; pin this checkout explicitly
-    # (PYTHONSAFEPATH / stale editable mapping, #112729). See cron/scheduler_worker_env.py.
+    # The direct `-m cron.scheduler` fallback has no hermes_cli.main bootstrap; pin
+    # this checkout explicitly (PYTHONSAFEPATH / stale editable mapping, #112729).
+    # Managed-store commands clear PYTHONPATH and bootstrap both tree and dependencies.
     from cron.scheduler_worker_env import pin_hermes_tree_on_pythonpath
-    repo_root = Path(__file__).resolve().parent.parent
     worker_env = pin_hermes_tree_on_pythonpath(worker_env, repo_root)
     try:
         stderr_fd = os.open(stderr_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)

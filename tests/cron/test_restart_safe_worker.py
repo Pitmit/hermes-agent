@@ -610,6 +610,80 @@ def test_launch_external_worker_pins_the_gateways_tree_on_pythonpath(
     assert spawned[0][1]["cwd"] == str(repo_root)
 
 
+def test_external_worker_bootstraps_dependencies_when_gateway_runs_on_store_python(
+    tmp_path, monkeypatch,
+):
+    """The managed gateway keeps the store interpreter in ``sys.executable`` while
+    ``hermes_bootstrap`` adds the selected dependency generation only to this process.
+    A raw ``sys.executable -m cron.scheduler`` child therefore has the checkout but no
+    third-party dependencies. Re-enter through the installation runtime bootstrap."""
+    import cron.scheduler as scheduler
+    from tools.process_registry import GatewayChildDispatch
+
+    job = {"id": "job-1", "execution_id": "exec-1", "prompt": "work"}
+    store_python = tmp_path / "tools/python/bin/python3"
+    store_python.parent.mkdir(parents=True)
+    store_python.touch()
+    monkeypatch.setattr(scheduler, "_get_hermes_home", lambda: tmp_path)
+    monkeypatch.setattr(scheduler.sys, "executable", str(store_python))
+    monkeypatch.setattr(
+        "hermes_cli._launchers.resolve_store_python", lambda _root: store_python,
+    )
+    monkeypatch.setattr(
+        "tools.process_registry.restart_safe_gateway_child_argv",
+        lambda command, **_: GatewayChildDispatch("degraded", command),
+    )
+    spawned, _payloads, _handoff, _get = _stub_external_worker_launch(
+        scheduler, monkeypatch,
+    )
+
+    assert scheduler._launch_external_cron_worker(job) is True
+    argv = spawned[0][0]
+    assert argv[:3] == [str(store_python), "-I", "-c"]
+    assert "import hermes_bootstrap" in argv[3]
+    assert "runpy.run_module('cron.scheduler'" in argv[3]
+    assert argv[-4:] == [
+        "--external-worker-file",
+        str(tmp_path / "cron/external-workers/exec-1.json"),
+        "--ack-file",
+        str(tmp_path / "cron/external-workers/exec-1.ready"),
+    ]
+
+
+@pytest.mark.platforms("posix")
+def test_external_worker_keeps_selected_venv_even_when_python_symlinks_store(
+    tmp_path, monkeypatch,
+):
+    """#122513: realpath identity would collapse a selected venv onto the store
+    binary. Its lexical interpreter path and own sys.prefix are the dependency
+    environment, so it must keep the direct module command."""
+    import cron.scheduler as scheduler
+    from tools.process_registry import GatewayChildDispatch
+
+    job = {"id": "job-1", "execution_id": "exec-1", "prompt": "work"}
+    store_python = tmp_path / "tools/python/bin/python3"
+    store_python.parent.mkdir(parents=True)
+    store_python.touch()
+    venv_python = tmp_path / "venv/bin/python"
+    venv_python.parent.mkdir(parents=True)
+    venv_python.symlink_to(store_python)
+    monkeypatch.setattr(scheduler, "_get_hermes_home", lambda: tmp_path)
+    monkeypatch.setattr(scheduler.sys, "executable", str(venv_python))
+    monkeypatch.setattr(
+        "hermes_cli._launchers.resolve_store_python", lambda _root: store_python,
+    )
+    monkeypatch.setattr(
+        "tools.process_registry.restart_safe_gateway_child_argv",
+        lambda command, **_: GatewayChildDispatch("degraded", command),
+    )
+    spawned, _payloads, _handoff, _get = _stub_external_worker_launch(
+        scheduler, monkeypatch,
+    )
+
+    assert scheduler._launch_external_cron_worker(job) is True
+    assert spawned[0][0][:3] == [str(venv_python), "-m", "cron.scheduler"]
+
+
 def test_launch_external_worker_pin_extends_the_sanitized_env_not_os_environ(
     tmp_path, monkeypatch,
 ):
