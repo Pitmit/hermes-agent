@@ -611,11 +611,16 @@ def _log_security_warnings(name: str, skill_md: Path, content: str, all_dirs, ac
 
 
 def skill_view(
-    name: str, file_path: str | None = None, task_id: str | None = None, preprocess: bool = True) -> str:
+    name: str, file_path: str | None = None, task_id: str | None = None,
+    preprocess: bool = True, *, activate_deps: bool = True,
+    platform: str | None = None,
+) -> str:
     """View a skill (SKILL.md) or a file within its directory, as JSON. ``name`` is a skill name
     or path ("axolotl", "03-fine-tuning/axolotl"); "<plugin>:<skill>" resolves plugin-provided
     skills. ``preprocess`` applies the configured SKILL.md template / inline shell rendering;
-    slash/preload callers render the message themselves."""
+    slash/preload callers render the message themselves. Internal admission probes may set
+    ``activate_deps=False`` and an explicit ``platform`` to resolve availability without
+    installing dependencies or inheriting the creator session's platform policy."""
     try:
         # Validate before the ':' dispatch so a Windows drive path (C:\skills\foo) can't be
         # reinterpreted as a plugin namespace.
@@ -647,7 +652,8 @@ def skill_view(
         # Disabled by declared name, or by the exact path that IS this copy's load name (a same-tier
         # duplicate's row) — whatever alias reached it; an unrelated copy at that path elsewhere is not.
         rel = _owned_relative(skill_dir, skill_md, all_dirs)
-        if _is_skill_disabled(resolved_name, rel) and (_is_skill_disabled(resolved_name) or any(
+        if _is_skill_disabled(resolved_name, rel, platform=platform) and (
+                _is_skill_disabled(resolved_name, platform=platform) or any(
                 e["path"] == skill_md and e["load_name"] == rel for e in _skill_catalog(skip_disabled=True, include_hidden=True))):
             return _fail(f"Skill '{resolved_name}' is disabled. Enable it with `hermes skills` or inspect the files directly on disk.")
         if file_path and skill_dir:
@@ -677,7 +683,7 @@ def skill_view(
         declared_deps = frontmatter.get("deps") or []
         if isinstance(declared_deps, str):
             declared_deps = [declared_deps]
-        if isinstance(declared_deps, list) and declared_deps:
+        if activate_deps and isinstance(declared_deps, list) and declared_deps:
             failed_deps = []
             for dep in [str(d).strip() for d in declared_deps if str(d).strip()]:
                 try:
