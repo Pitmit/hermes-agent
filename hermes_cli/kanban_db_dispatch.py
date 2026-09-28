@@ -2013,6 +2013,83 @@ def _call_spawn_fn(spawn_fn, task: Task, workspace: str, board: Optional[str]) -
         return spawn_fn(task, workspace)
 
 
+def _assignee_terminal_backend(assignee: str) -> Optional[str]:
+    """Return an assignee profile's effective terminal backend.
+
+    Use the same profile home, secret scope, environment expansion and
+    ``TERMINAL_ENV`` precedence as the worker process. An unreadable profile is
+    ``unknown`` rather than local: the persistent-workspace rail must fail
+    closed when it cannot prove where files will be written.
+    """
+    try:
+        from hermes_cli.profiles import normalize_profile_name, resolve_profile_env
+        from hermes_cli.config import load_config
+        from tools.terminal_scope import terminal_env
+
+        home = Path(resolve_profile_env(normalize_profile_name(assignee)))
+        with _worker_profile_scope(str(home)):
+            data = load_config() or {}
+            terminal = data.get("terminal") if isinstance(data, dict) else None
+            configured = terminal.get("backend") if isinstance(terminal, dict) else None
+            backend = terminal_env("TERMINAL_ENV") or configured or "local"
+        return str(backend).strip().lower() or "local"
+    except Exception as exc:
+        _kb._log.warning(
+            "kanban dispatch: cannot resolve terminal backend for assignee %r: %s",
+            assignee, exc,
+        )
+        return "unknown"
+
+
+def _ssh_workspace_guard_reason(
+    row: Any, assignee: str, *, board: Optional[str],
+) -> Optional[str]:
+    """Reject host-local persistent workspaces for SSH-backed profiles.
+
+    SSH environments synchronize ``~/.hermes`` only.  A host path such as
+    ``/home/hermes/workspace/foo`` is independently created on the remote VM:
+    inputs are absent and outputs never return to the board host.  Scratch
+    workspaces already live below the board's NFS-exported workspaces root;
+    explicit dir/worktree paths are safe only when they stay below that same
+    root.
+    """
+    backend = _assignee_terminal_backend(assignee)
+    if backend not in {"ssh", "unknown"}:
+        return None
+
+    def _field(name: str, default: Any = None) -> Any:
+        if hasattr(row, name):
+            return getattr(row, name)
+        try:
+            return row[name]
+        except (KeyError, IndexError, TypeError):
+            return default
+
+    kind = str(_field("workspace_kind", "scratch") or "scratch").strip().lower()
+    raw_path = str(_field("workspace_path", "") or "").strip()
+    # Normal scratch tasks are allocated below workspaces_root by
+    # resolve_workspace. Legacy scratch rows may carry an explicit path, which
+    # resolve_workspace intentionally honors like a dir task; those must pass
+    # the same shared-root containment check.
+    if kind == "scratch" and not raw_path:
+        return None
+    if raw_path:
+        try:
+            path = Path(raw_path).expanduser().resolve(strict=False)
+            shared_root = Path(_kb.workspaces_root(board=board)).expanduser().resolve(strict=False)
+            if path == shared_root or path.is_relative_to(shared_root):
+                return None
+        except (OSError, RuntimeError, ValueError):
+            pass
+    return (
+        f"workspace incompatible with {'SSH' if backend == 'ssh' else backend} assignee "
+        f"{assignee!r}: {kind} workspace "
+        f"{raw_path or '<unset>'!r} is host-local. Use workspace_kind='scratch' or an "
+        f"explicit path below {_kb.workspaces_root(board=board)!s}; SSH file sync covers "
+        "~/.hermes only, so other inputs are absent remotely and outputs cannot return."
+    )
+
+
 def _dispatch_lane_task(
     conn: sqlite3.Connection,
     row: sqlite3.Row,
@@ -2040,6 +2117,15 @@ def _dispatch_lane_task(
     profile_exists = _profile_exists_fn()
     if profile_exists is not None and not profile_exists(assignee):
         result.skipped_nonspawnable.append(task_id)
+        return False
+    # Scheduler rows intentionally select only dispatch fields; load the canonical
+    # Task for workspace_kind/workspace_path before applying the SSH rail guard.
+    workspace_task = _kb.get_task(conn, task_id)
+    workspace_guard = _ssh_workspace_guard_reason(workspace_task or row, assignee, board=board)
+    if workspace_guard is not None:
+        result.auto_blocked.append(task_id)
+        if not dry_run:
+            _kb.block_task(conn, task_id, reason=workspace_guard, kind="capability")
         return False
     # Per-profile cap: one profile's local model / API quota / browser pool
     # must not be overwhelmed by a fan-out even with global headroom.
@@ -2076,6 +2162,16 @@ def _dispatch_lane_task(
     claim = _kb.claim_review_task if lane == "review" else _kb.claim_task
     claimed = claim(conn, task_id, ttl_seconds=ttl_seconds)
     if claimed is None:
+        return False
+    # Re-check after claim so an external editor cannot swap workspace_path in
+    # the small window between the scheduler read and claim.
+    claimed_guard = _ssh_workspace_guard_reason(claimed, assignee, board=board)
+    if claimed_guard is not None:
+        result.auto_blocked.append(task_id)
+        _kb.block_task(
+            conn, task_id, reason=claimed_guard, kind="capability",
+            expected_run_id=claimed.current_run_id,
+        )
         return False
     try:
         resolved_branch_name = None
@@ -2259,6 +2355,7 @@ def _any_spawnable_review(
     *,
     per_profile_cap: Optional[int] = None,
     per_profile_running: Optional[dict[str, int]] = None,
+    board: Optional[str] = None,
 ) -> bool:
     """Mirror review dispatch gates before reserving ready-lane capacity.
 
@@ -2277,6 +2374,11 @@ def _any_spawnable_review(
         if not assignee:
             continue
         if profile_exists is not None and not profile_exists(assignee):
+            continue
+        review_task = _kb.get_task(conn, row["id"])
+        if review_task is not None and _ssh_workspace_guard_reason(
+            review_task, assignee, board=board,
+        ) is not None:
             continue
         if per_profile_cap is not None and running.get(assignee, 0) >= per_profile_cap:
             continue
@@ -2366,6 +2468,7 @@ def _dispatch_once_locked(
     if spawn_budget is not None and spawn_budget > 0 and _any_spawnable_review(
         conn, review_rows,
         per_profile_cap=per_profile_cap, per_profile_running=per_profile_running,
+        board=board,
     ):
         ready_budget = max(spawn_budget - 1, 0)
     lane_kwargs: dict[str, Any] = dict(

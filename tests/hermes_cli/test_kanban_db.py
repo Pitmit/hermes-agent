@@ -1575,6 +1575,165 @@ def test_connect_heals_reduced_tasks_schema_seeded_by_external_harness(kanban_ho
 # ---------------------------------------------------------------------------
 
 
+def test_ssh_workspace_guard_allows_scratch_and_shared_root(monkeypatch, tmp_path):
+    from hermes_cli import kanban_db_dispatch as kbd
+
+    shared = tmp_path / "kanban" / "workspaces"
+    monkeypatch.setattr(kbd, "_assignee_terminal_backend", lambda _name: "ssh")
+    monkeypatch.setattr(kbd._kb, "workspaces_root", lambda board=None: shared)
+
+    assert kbd._ssh_workspace_guard_reason(
+        {"workspace_kind": "scratch", "workspace_path": None}, "worker-spec", board=None,
+    ) is None
+    assert kbd._ssh_workspace_guard_reason(
+        {"workspace_kind": "dir", "workspace_path": str(shared / "project")},
+        "worker-spec", board=None,
+    ) is None
+    assert kbd._ssh_workspace_guard_reason(
+        {"workspace_kind": "dir", "workspace_path": str(shared)},
+        "worker-spec", board=None,
+    ) is None
+
+
+def test_ssh_workspace_guard_rejects_host_local_dir(monkeypatch, tmp_path):
+    from hermes_cli import kanban_db_dispatch as kbd
+
+    shared = tmp_path / "kanban" / "workspaces"
+    monkeypatch.setattr(kbd, "_assignee_terminal_backend", lambda _name: "ssh")
+    monkeypatch.setattr(kbd._kb, "workspaces_root", lambda board=None: shared)
+
+    reason = kbd._ssh_workspace_guard_reason(
+        {"workspace_kind": "dir", "workspace_path": "/home/hermes/workspace/routing-eval"},
+        "worker-spec", board=None,
+    )
+    assert reason is not None
+    assert "workspace incompatible with SSH assignee" in reason
+    assert "workspace_kind='scratch'" in reason
+    assert kbd._ssh_workspace_guard_reason(
+        {"workspace_kind": "worktree", "workspace_path": "/srv/repo/.worktrees/t_1"},
+        "worker-spec", board=None,
+    ) is not None
+    assert kbd._ssh_workspace_guard_reason(
+        {"workspace_kind": "dir", "workspace_path": str(shared / "ok" / ".." / "..")},
+        "worker-spec", board=None,
+    ) is not None
+    assert kbd._ssh_workspace_guard_reason(
+        {"workspace_kind": "dir", "workspace_path": None},
+        "worker-spec", board=None,
+    ) is not None
+    assert kbd._ssh_workspace_guard_reason(
+        {"workspace_kind": "scratch", "workspace_path": "/home/hermes/workspace/legacy"},
+        "worker-spec", board=None,
+    ) is not None
+    assert kbd._ssh_workspace_guard_reason(
+        {"workspace_kind": "scratch", "workspace_path": str(shared / "legacy")},
+        "worker-spec", board=None,
+    ) is None
+
+
+def test_assignee_terminal_backend_uses_effective_profile_config_over_stale_env(kanban_home):
+    profile = kanban_home / "profiles" / "worker-spec"
+    profile.mkdir(parents=True)
+    (profile / "config.yaml").write_text(
+        "terminal:\n  backend: local\n", encoding="utf-8",
+    )
+    (profile / ".env").write_text("TERMINAL_ENV=ssh\n", encoding="utf-8")
+
+    # Current startup policy re-applies explicit terminal.* config after dotenv
+    # loading so a stale legacy TERMINAL_ENV cannot silently flip the backend.
+    assert kbd._assignee_terminal_backend("worker-spec") == "local"
+
+
+def test_ssh_workspace_guard_fails_closed_when_backend_is_unknown(monkeypatch, tmp_path):
+    shared = tmp_path / "shared"
+    monkeypatch.setattr(kbd, "_assignee_terminal_backend", lambda _name: "unknown")
+    monkeypatch.setattr(kbd._kb, "workspaces_root", lambda board=None: shared)
+
+    reason = kbd._ssh_workspace_guard_reason(
+        {"workspace_kind": "dir", "workspace_path": "/home/hermes/workspace/project"},
+        "worker-spec", board=None,
+    )
+    assert reason is not None
+    assert "unknown assignee" in reason
+
+
+def test_dispatch_blocks_incompatible_ssh_workspace_before_spawn(
+    kanban_home, all_assignees_spawnable, monkeypatch, tmp_path,
+):
+    shared = tmp_path / "shared"
+    monkeypatch.setattr(kbd, "_assignee_terminal_backend", lambda _name: "ssh")
+    monkeypatch.setattr(kbd._kb, "workspaces_root", lambda board=None: shared)
+    spawned = []
+
+    with kbc.connect() as conn:
+        tid = kb.create_task(
+            conn, title="host local", assignee="worker-spec",
+            workspace_kind="dir", workspace_path="/home/hermes/workspace/routing-eval",
+        )
+        result = kbd.dispatch_once(
+            conn, spawn_fn=lambda task, workspace, board=None: spawned.append(task.id) or 42,
+        )
+        task = kb.get_task(conn, tid)
+
+    assert spawned == []
+    assert tid in result.auto_blocked
+    assert task is not None
+    assert task.status == "blocked"
+    assert task.block_kind == "capability"
+
+
+def test_dispatch_dry_run_reports_but_does_not_block_ssh_workspace(
+    kanban_home, all_assignees_spawnable, monkeypatch, tmp_path,
+):
+    shared = tmp_path / "shared"
+    monkeypatch.setattr(kbd, "_assignee_terminal_backend", lambda _name: "ssh")
+    monkeypatch.setattr(kbd._kb, "workspaces_root", lambda board=None: shared)
+
+    with kbc.connect() as conn:
+        tid = kb.create_task(
+            conn, title="dry run", assignee="worker-spec",
+            workspace_kind="dir", workspace_path="/home/hermes/workspace/project",
+        )
+        result = kbd.dispatch_once(conn, dry_run=True)
+        task = kb.get_task(conn, tid)
+
+    assert tid in result.auto_blocked
+    assert task is not None
+    assert task.status == "ready"
+
+
+def test_dispatch_blocks_incompatible_review_once_and_unblock_restores_review(
+    kanban_home, all_assignees_spawnable, monkeypatch, tmp_path,
+):
+    shared = tmp_path / "shared"
+    monkeypatch.setattr(kbd, "_assignee_terminal_backend", lambda _name: "ssh")
+    monkeypatch.setattr(kbd._kb, "workspaces_root", lambda board=None: shared)
+    spawned = []
+
+    with kbc.connect() as conn:
+        tid = kb.create_task(
+            conn, title="review host local", assignee="worker-spec",
+            workspace_kind="dir", workspace_path="/home/hermes/workspace/project",
+        )
+        assert kb.request_review(conn, tid, reviewer="worker-spec", force=True)
+        first = kbd.dispatch_once(
+            conn, spawn_fn=lambda task, workspace, board=None: spawned.append(task.id) or 42,
+        )
+        blocked = kb.get_task(conn, tid)
+        second = kbd.dispatch_once(
+            conn, spawn_fn=lambda task, workspace, board=None: spawned.append(task.id) or 43,
+        )
+        assert kb.unblock_task(conn, tid)
+        resumed = kb.get_task(conn, tid)
+
+    assert spawned == []
+    assert tid in first.auto_blocked
+    assert tid not in second.auto_blocked
+    assert blocked is not None and blocked.status == "blocked"
+    assert blocked.block_kind == "capability"
+    assert resumed is not None and resumed.status == "review"
+
+
 def test_resolve_hermes_argv_prefers_installation_bound_command_over_path_shim(monkeypatch):
     """A `hermes` on PATH must not shadow the running install (#111569):
     the installation-bound argv wins whenever ``hermes_cli`` is importable; only an
