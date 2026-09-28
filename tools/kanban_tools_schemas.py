@@ -422,6 +422,13 @@ KANBAN_CREATE_SCHEMA = _schema(
                 "Absolute path for 'dir' or 'worktree' workspace. "
                 "Relative paths are rejected at dispatch."
         )),
+        "remote_workspace_verified": _prop("boolean", (
+                "Required acknowledgement when workspace_kind is 'dir' or 'worktree' and the assignee uses a "
+                "non-local terminal backend (docker/modal/etc.). Set true only after a "
+                "read/write probe from that exact profile/backend proves workspace_path "
+                "contains the intended bytes. SSH is stricter: only scratch or a path below "
+                "the board's shared workspaces root is accepted, matching the dispatcher."
+        )),
         "project": _prop("string", (
                 "Optional project id or slug to link the task to. When "
                 "set, the task becomes a git worktree under the project's "

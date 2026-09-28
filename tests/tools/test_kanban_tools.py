@@ -646,6 +646,89 @@ def test_create_rejects_forced_skill_missing_from_assignee_profile(worker_env, t
     assert dependency_activations == [], "admission checks must not install skill dependencies"
 
 
+def test_create_rejects_unverified_host_dir_for_remote_assignee(worker_env, tmp_path):
+    """A host-local dir is not evidence that an SSH-backed profile can see it."""
+    from hermes_cli import kanban_db as kb
+    from hermes_cli import kanban_db_connect as kbc
+    from tools import kanban_tools as kt
+
+    profile = tmp_path / ".hermes" / "profiles" / "peer"
+    profile.mkdir(parents=True)
+    (profile / "config.yaml").write_text(
+        "terminal:\n  backend: ssh\n",
+        encoding="utf-8",
+    )
+    shared = tmp_path / "host-only-project"
+    shared.mkdir()
+
+    rejected = json.loads(kt._handle_create({
+        "title": "remote cannot see host dir",
+        "assignee": "peer",
+        "workspace_kind": "dir",
+        "workspace_path": str(shared),
+    }))
+    assert "remote_workspace_verified" in rejected["error"]
+    assert "backend 'ssh'" in rejected["error"]
+    with kbc.connect_closing() as conn:
+        assert all(t.title != "remote cannot see host dir" for t in kb.list_tasks(conn))
+
+    still_rejected = json.loads(kt._handle_create({
+        "title": "ssh override cannot bypass dispatcher guard",
+        "assignee": "peer",
+        "workspace_kind": "dir",
+        "workspace_path": str(shared),
+        "remote_workspace_verified": True,
+    }))
+    assert "dispatcher will block it" in still_rejected["error"]
+
+    from hermes_cli import kanban_db as kb_runtime
+    ssh_shared = kb_runtime.workspaces_root() / "verified"
+    accepted_shared = json.loads(kt._handle_create({
+        "title": "ssh shared workspace accepted",
+        "assignee": "peer",
+        "workspace_kind": "dir",
+        "workspace_path": str(ssh_shared),
+    }))
+    assert accepted_shared["ok"] is True, accepted_shared
+
+    rejected_worktree = json.loads(kt._handle_create({
+        "title": "remote cannot see host worktree",
+        "assignee": "peer",
+        "workspace_kind": "worktree",
+        "workspace_path": str(tmp_path / "host-worktree"),
+    }))
+    assert "remote_workspace_verified" in rejected_worktree["error"]
+
+    docker_profile = tmp_path / ".hermes" / "profiles" / "dockerpeer"
+    docker_profile.mkdir(parents=True)
+    (docker_profile / "config.yaml").write_text(
+        "terminal:\n  backend: docker\n",
+        encoding="utf-8",
+    )
+    docker_accepted = json.loads(kt._handle_create({
+        "title": "docker dir explicitly verified",
+        "assignee": "dockerpeer",
+        "workspace_kind": "dir",
+        "workspace_path": str(shared),
+        "remote_workspace_verified": True,
+    }))
+    assert docker_accepted["ok"] is True, docker_accepted
+
+    local_profile = tmp_path / ".hermes" / "profiles" / "localpeer"
+    local_profile.mkdir(parents=True)
+    (local_profile / "config.yaml").write_text(
+        "terminal:\n  backend: local\n",
+        encoding="utf-8",
+    )
+    local_accepted = json.loads(kt._handle_create({
+        "title": "local profile sees host dir",
+        "assignee": "localpeer",
+        "workspace_kind": "dir",
+        "workspace_path": str(shared),
+    }))
+    assert local_accepted["ok"] is True, local_accepted
+
+
 @pytest.mark.parametrize("explicit", [{"workspace_kind": "scratch"}, {"project": ""}])
 @pytest.mark.parametrize("target_scoped", [False, True])
 def test_create_explicit_scratch_ignores_ambient_board_project(

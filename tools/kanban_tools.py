@@ -1072,6 +1072,56 @@ def _validate_assignee_skills(
            "required procedure in the task body. The card was not created.")
 
 
+def _validate_remote_dir_workspace(
+    assignee: str, workspace_kind: Optional[str], workspace_path: Optional[str],
+    *, remote_workspace_verified: bool, board: Optional[str],
+) -> None:
+    """Refuse a host ``dir`` assumption for a remote terminal profile.
+
+    ``workspace_path`` is persisted by the board, but file/terminal tools run in
+    the assignee's configured backend.  An SSH/docker/modal worker therefore may
+    see a different filesystem even when the absolute pathname is identical.
+    The explicit override is an operator assertion backed by a real probe from
+    that worker/backend; it is never inferred from host-side ``Path.exists``.
+    """
+    if workspace_kind not in {"dir", "worktree"} or not workspace_path:
+        return
+    from hermes_cli.profiles import get_profile_dir, profile_exists
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+    if not profile_exists(assignee):
+        return  # preserve existing unknown-assignee handling when no skills are pinned
+    token = set_hermes_home_override(get_profile_dir(assignee))
+    try:
+        backend = str(cfg_get(load_config(), "terminal", "backend", default="local") or "local")
+    finally:
+        reset_hermes_home_override(token)
+    if backend == "ssh":
+        from pathlib import Path
+        from hermes_cli import kanban_db as _kb
+
+        try:
+            candidate = Path(workspace_path).expanduser().resolve(strict=False)
+            shared_root = Path(_kb.workspaces_root(board=board)).expanduser().resolve(strict=False)
+            shared = candidate == shared_root or candidate.is_relative_to(shared_root)
+        except (OSError, RuntimeError, ValueError):
+            shared = False
+        _check(shared,
+               f"assignee profile {assignee!r} uses terminal backend 'ssh'; host directory "
+               f"{workspace_path!r} is outside the board's shared workspaces root "
+               f"{_kb.workspaces_root(board=board)!s}. The dispatcher will block it even with "
+               "remote_workspace_verified=true. Use workspace_kind='scratch' or an explicit "
+               "path below that shared root. The card was not created.")
+    elif backend != "local":
+        _check(remote_workspace_verified,
+               f"assignee profile {assignee!r} uses terminal backend {backend!r}; host directory "
+               f"{workspace_path!r} is not proof that the worker can read the same bytes. "
+               "Probe the exact path from that profile/backend first, then retry with "
+               "remote_workspace_verified=true, or use a local assignee / remote scratch "
+               "workspace. Host-created worktrees require the same remote visibility proof. "
+               "The card was not created.")
+
+
 @_kanban_handler("kanban_create")
 def _handle_create(args: dict, **kw) -> str:
     """Create a (child) task; orchestrator workers use this to fan out."""
@@ -1085,6 +1135,7 @@ def _handle_create(args: dict, **kw) -> str:
     # mutate review evidence or race its checkout). Project identity is the one safe thing
     # to inherit implicitly (the DB turns it into a fresh per-task worktree).
     workspace_kind, workspace_path = args.get("workspace_kind"), args.get("workspace_path")
+    remote_workspace_verified = _parse_bool_arg(args, "remote_workspace_verified")
     # See #67567. ``project=""`` is an explicit "no project" (no ``or`` collapse, #106342).
     project_id = args["project"] if "project" in args else args.get("project_id")
     project_source_task_id = None
@@ -1092,6 +1143,10 @@ def _handle_create(args: dict, **kw) -> str:
         _parse_bool_arg(args, "triage"), _coerce_str_list(args.get("skills"), "skills", "skill names"),
         _parse_bool_arg(args, "goal_mode"))
     _validate_assignee_skills(str(assignee), skills)
+    _validate_remote_dir_workspace(
+        str(assignee), workspace_kind, workspace_path,
+        remote_workspace_verified=remote_workspace_verified, board=args.get("board"),
+    )
     model_override, provider_override = args.get("model"), args.get("provider")
     _check(model_override or not provider_override, "'provider' requires 'model' to be set as well")
     parents = _coerce_str_list(args.get("parents") or [], "parents", "task ids")
