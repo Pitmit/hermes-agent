@@ -606,6 +606,46 @@ def test_create_happy_path(worker_env):
         conn.close()
 
 
+def test_create_rejects_forced_skill_missing_from_assignee_profile(worker_env, tmp_path, monkeypatch):
+    """Per-task skills are resolved inside the assignee profile, not the creator.
+
+    Reject an impossible pin before a card can enter the dispatcher crash loop.
+    """
+    from hermes_cli import kanban_db as kb
+    from hermes_cli import kanban_db_connect as kbc
+    from tools import kanban_tools as kt
+
+    profile = tmp_path / ".hermes" / "profiles" / "peer"
+    (profile / "skills" / "local" / "available").mkdir(parents=True)
+    (profile / "config.yaml").write_text("{}\n", encoding="utf-8")
+    (profile / "skills" / "local" / "available" / "SKILL.md").write_text(
+        "---\nname: available\ndescription: available here\ndeps: [fake-runtime]\n---\n# Available\n",
+        encoding="utf-8",
+    )
+    import pm
+    dependency_activations = []
+    monkeypatch.setattr(pm, "ensure", lambda name: dependency_activations.append(name))
+
+    rejected = json.loads(kt._handle_create({
+        "title": "impossible skill pin",
+        "assignee": "peer",
+        "skills": ["missing-on-peer"],
+    }))
+
+    assert "missing-on-peer" in rejected["error"]
+    assert "assignee profile 'peer'" in rejected["error"]
+    with kbc.connect_closing() as conn:
+        assert all(t.title != "impossible skill pin" for t in kb.list_tasks(conn))
+
+    accepted = json.loads(kt._handle_create({
+        "title": "valid skill pin",
+        "assignee": "peer",
+        "skills": ["available"],
+    }))
+    assert accepted["ok"] is True, accepted
+    assert dependency_activations == [], "admission checks must not install skill dependencies"
+
+
 @pytest.mark.parametrize("explicit", [{"workspace_kind": "scratch"}, {"project": ""}])
 @pytest.mark.parametrize("target_scoped", [False, True])
 def test_create_explicit_scratch_ignores_ambient_board_project(
@@ -658,6 +698,71 @@ def test_link_running_child_allows_owner_but_rejects_foreign(monkeypatch, worker
     with kbc.connect() as conn:
         assert kb.parent_ids(conn, worker_env) == [own_parent]
         assert kb.parent_ids(conn, foreign_child) == []
+
+
+def test_link_warns_that_blocked_child_remains_sticky(worker_env):
+    """A dependency edge must not look like it auto-resumed a human-blocked card."""
+    from hermes_cli import kanban_db as kb
+    from hermes_cli import kanban_db_connect as kbc
+    from tools import kanban_tools as kt
+
+    with kbc.connect() as conn:
+        parent = kb.create_task(conn, title="new prerequisite", assignee="peer")
+        child = kb.create_task(conn, title="sticky waiter", assignee="peer")
+        assert kb.block_task(conn, child, reason="need a target", kind="needs_input")
+
+    linked = json.loads(kt._handle_link({"parent_id": parent, "child_id": child}))
+
+    assert linked["ok"] is True
+    assert linked["child_status"] == "blocked"
+    assert linked["attention_required"] is True
+    assert linked["sticky_block"] is True
+    assert "kanban_unblock" in linked["next_action"]
+    with kbc.connect_closing() as conn:
+        stored = kb.get_task(conn, child)
+        assert stored is not None and stored.status == "blocked"
+
+
+def test_link_nonblocked_child_omits_sticky_warning(worker_env):
+    from hermes_cli import kanban_db as kb
+    from hermes_cli import kanban_db_connect as kbc
+    from tools import kanban_tools as kt
+
+    with kbc.connect() as conn:
+        parent = kb.create_task(conn, title="open prerequisite", assignee="peer")
+        child = kb.create_task(conn, title="ready child", assignee="peer")
+
+    linked = json.loads(kt._handle_link({"parent_id": parent, "child_id": child}))
+
+    assert linked["ok"] is True
+    assert linked["parent_status"] == "ready"
+    assert linked["child_status"] == "todo"
+    assert linked["gated"] is True
+    assert "attention_required" not in linked
+    assert "sticky_block" not in linked
+    assert "next_action" not in linked
+
+
+def test_sticky_child_recovery_path_matches_link_next_action(worker_env):
+    """Exact incident path: link -> unblock -> todo -> parent done -> ready."""
+    from hermes_cli import kanban_db as kb
+    from hermes_cli import kanban_db_connect as kbc
+
+    with kbc.connect_closing() as conn:
+        parent = kb.create_task(conn, title="late prerequisite", assignee="peer")
+        child = kb.create_task(conn, title="blocked root", assignee="peer")
+        assert kb.block_task(conn, child, reason="target missing", kind="needs_input")
+        assert kb.link_tasks(conn, parent, child) is False
+        stored = kb.get_task(conn, child)
+        assert stored is not None and stored.status == "blocked"
+
+        assert kb.unblock_task(conn, child)
+        stored = kb.get_task(conn, child)
+        assert stored is not None and stored.status == "todo"
+
+        assert kb.complete_task(conn, parent, summary="prerequisite ready")
+        stored = kb.get_task(conn, child)
+        assert stored is not None and stored.status == "ready"
 
 
 def test_unblock_happy_path(monkeypatch, worker_env):

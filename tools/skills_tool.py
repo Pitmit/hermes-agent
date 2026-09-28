@@ -149,7 +149,7 @@ def _parse_tags(tags_value) -> List[str]:
     return [t.strip().strip("\"'") for t in tags_value.split(",") if t.strip()]
 
 
-def _is_skill_disabled(name: str, platform: str = None) -> bool:
+def _is_skill_disabled(name: str, platform: Optional[str] = None) -> bool:
     """Disabled in config? Platform precedence: explicit arg, ``HERMES_PLATFORM``, session
     ``HERMES_SESSION_PLATFORM``. A globally-disabled skill stays disabled on every platform
     (keep in sync with agent.skill_utils.get_disabled_skill_names)."""
@@ -571,11 +571,16 @@ def _log_security_warnings(name: str, skill_md: Path, content: str, all_dirs, ac
 
 
 def skill_view(
-    name: str, file_path: str = None, task_id: str = None, preprocess: bool = True) -> str:
+    name: str, file_path: Optional[str] = None, task_id: Optional[str] = None,
+    preprocess: bool = True, *, activate_deps: bool = True,
+    platform: Optional[str] = None,
+) -> str:
     """View a skill (SKILL.md) or a file within its directory, as JSON. ``name`` is a skill name
     or path ("axolotl", "03-fine-tuning/axolotl"); "plugin:skill" resolves plugin-provided
     skills. ``preprocess`` applies the configured SKILL.md template / inline shell rendering;
-    slash/preload callers render the message themselves."""
+    slash/preload callers render the message themselves. Internal admission probes may set
+    ``activate_deps=False`` and an explicit ``platform`` to resolve availability without
+    installing dependencies or inheriting the creator session's platform policy."""
     try:
         # Validate before the ':' dispatch so a Windows drive path (C:\skills\foo) can't be
         # reinterpreted as a plugin namespace.
@@ -604,7 +609,7 @@ def skill_view(
         if not skill_matches_platform(frontmatter):
             return _fail(f"Skill '{name}' is not supported on this platform.", readiness_status=SkillReadinessStatus.UNSUPPORTED.value)
         resolved_name = frontmatter.get("name", skill_md.parent.name)
-        if _is_skill_disabled(resolved_name):
+        if _is_skill_disabled(resolved_name, platform=platform):
             return _fail(f"Skill '{resolved_name}' is disabled. Enable it with `hermes skills` or inspect the files directly on disk.")
         if file_path and skill_dir:
             return _serve_skill_file(
@@ -640,7 +645,7 @@ def skill_view(
         declared_deps = frontmatter.get("deps") or []
         if isinstance(declared_deps, str):
             declared_deps = [declared_deps]
-        if isinstance(declared_deps, list) and declared_deps:
+        if activate_deps and isinstance(declared_deps, list) and declared_deps:
             failed_deps = []
             for dep in [str(d).strip() for d in declared_deps if str(d).strip()]:
                 try:

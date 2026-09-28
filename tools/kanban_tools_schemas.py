@@ -463,7 +463,8 @@ KANBAN_CREATE_SCHEMA = _schema(
                 "context — e.g. ['translation'] for a translation "
                 "task, ['github-code-review'] for a reviewer task. "
                 "The names must match skills installed on the "
-                "assignee's profile."
+                "assignee's profile; profiles have isolated skill catalogs. "
+                "Creation fails before dispatch when a forced skill is missing."
             ),
         },
         "goal_mode": _prop("boolean", (
@@ -526,7 +527,9 @@ KANBAN_LINK_SCHEMA = _schema(
         "exist. The child won't promote to 'ready' until all parents "
         "are 'done'. Cycles and self-links are rejected. A running child "
         "is rejected unless the active owning worker is linking its own "
-        "card for a dependency handoff."
+        "card for a dependency handoff. Linking never clears a sticky "
+        "human block: the result explicitly tells the orchestrator to "
+        "call kanban_unblock so the child enters dependency-gated todo."
     ),
     {
         "parent_id": {"type": "string", "description": "Parent task id."},

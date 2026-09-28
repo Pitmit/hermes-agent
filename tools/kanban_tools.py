@@ -1029,6 +1029,49 @@ def _persisted_session_id(session_id: Optional[str]) -> Optional[str]:
         state.close()
 
 
+def _validate_assignee_skills(
+    assignee: str, skills: list[str] | tuple[str, ...] | None,
+) -> None:
+    """Fail before card creation when forced skills cannot load in *assignee*.
+
+    Named profiles have isolated ``HERMES_HOME`` trees.  Validating against the
+    creator's skill catalog lets an impossible card enter the dispatcher, crash
+    at CLI startup, retry unchanged, and finally trip the failure breaker.  Use
+    the same preload resolver the worker CLI will use, under a context-local
+    target-profile home, so disabled/external/plugin skill behavior stays
+    aligned without mutating process-global environment.
+    """
+    if not skills:
+        return
+    from agent.skill_utils import normalize_skill_lookup_name
+    from hermes_cli.profiles import get_profile_dir, list_profile_names, profile_exists
+    from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+    from tools.skills_tool import skill_view
+
+    _check(profile_exists(assignee),
+           f"assignee profile {assignee!r} is not installed. "
+           f"Installed profiles: {', '.join(list_profile_names())}")
+    token = set_hermes_home_override(get_profile_dir(assignee))
+    try:
+        missing = []
+        for name in skills:
+            try:
+                result = json.loads(skill_view(
+                    normalize_skill_lookup_name(name), preprocess=False,
+                    activate_deps=False, platform="cli"))
+            except Exception:
+                result = {}
+            if not result.get("success"):
+                missing.append(name)
+    finally:
+        reset_hermes_home_override(token)
+    _check(not missing,
+           f"forced skill(s) {', '.join(repr(name) for name in missing)} are not available in "
+           f"assignee profile {assignee!r}. Verify with `hermes -p {assignee} skills list "
+           "--enabled-only`, install/enable them there, or omit `skills` and carry the "
+           "required procedure in the task body. The card was not created.")
+
+
 @_kanban_handler("kanban_create")
 def _handle_create(args: dict, **kw) -> str:
     """Create a (child) task; orchestrator workers use this to fan out."""
@@ -1048,6 +1091,7 @@ def _handle_create(args: dict, **kw) -> str:
     triage, skills, goal_mode = (
         _parse_bool_arg(args, "triage"), _coerce_str_list(args.get("skills"), "skills", "skill names"),
         _parse_bool_arg(args, "goal_mode"))
+    _validate_assignee_skills(str(assignee), skills)
     model_override, provider_override = args.get("model"), args.get("provider")
     _check(model_override or not provider_override, "'provider' requires 'model' to be set as well")
     parents = _coerce_str_list(args.get("parents") or [], "parents", "task ids")
@@ -1192,8 +1236,25 @@ def _handle_link(args: dict, **kw) -> str:
         gated = kb.link_tasks(
             conn, parent_id=parent_id, child_id=child_id,
             expected_child_run_id=_worker_run_id(str(child_id)))
+        parent, child = kb.get_task(conn, parent_id), kb.get_task(conn, child_id)
+        extra: dict[str, Any] = {
+            "parent_status": parent.status if parent else None,
+            "child_status": child.status if child else None,
+        }
+        if child and child.status == "blocked":
+            extra.update(
+                attention_required=True,
+                sticky_block=True,
+                next_action=(
+                    f"The dependency edge was recorded, but {child_id} remains in sticky "
+                    f"'blocked'. If {parent_id} now represents the blocker, call "
+                    f"kanban_unblock(task_id={child_id!r}) immediately: it will land in "
+                    "parent-gated 'todo' while the parent is open, then auto-promote after "
+                    "the parent completes. Do not rely on a comment or dispatcher polling."
+                ),
+            )
         return _ok(parent_id=parent_id, child_id=child_id, gated=gated,
-                   **({"gated_by": parent_id} if gated else {}))
+                   **({"gated_by": parent_id} if gated else {}), **extra)
 
 
 # --- Registration (order preserved: it is the order tools appear in the schema) ---
