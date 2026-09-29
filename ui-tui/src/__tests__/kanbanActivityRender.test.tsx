@@ -2,12 +2,17 @@ import { PassThrough } from 'stream'
 
 import { renderSync, stringWidth, Text } from '@hermes/ink'
 import React from 'react'
+import stripAnsi from 'strip-ansi'
 import { describe, expect, it } from 'vitest'
 
-import { KanbanActivityDock, KanbanActivityRow, KanbanExecutionSpine } from '../components/kanbanActivity.js'
+import {
+  KanbanActivityDock,
+  KanbanActivityRow,
+  KanbanExecutionSpine,
+  KanbanPanelView
+} from '../components/kanbanActivity.js'
 import type { KanbanActivityResponse, KanbanActivityTask } from '../gatewayTypes.js'
 import { buildKanbanActivityRows, normalizeKanbanActivity } from '../lib/kanbanActivity.js'
-import { stripAnsi } from '../lib/text.js'
 import { DEFAULT_THEME } from '../theme.js'
 
 const NOW = 1_721_000_000
@@ -149,6 +154,48 @@ describe('Kanban activity static Ink components', () => {
     expect(frame).toContain('Kanban')
     expect(frame).toContain('1 active')
     expect(frame).toContain('Build execution spine')
+  })
+
+  it('renders the live panel expanded and collapses it to one restorable row', () => {
+    const model = activity([
+      {
+        board: 'default',
+        roots: [
+          task({ block_reason: 'Human approval required', run: null, status: 'blocked', task_id: 'gate', title: 'Release gate' }),
+          task({ run: null, status: 'todo', task_id: 'merge', title: 'Merge after approval' })
+        ]
+      }
+    ])
+    const expanded = renderFrame(
+      <KanbanPanelView activity={model} collapsed={false} cols={78} maxRows={6} now={NOW} t={DEFAULT_THEME} />
+    )
+    const collapsed = renderFrame(
+      <KanbanPanelView activity={model} collapsed cols={78} maxRows={6} now={NOW} t={DEFAULT_THEME} />
+    )
+
+    expect(expanded).toContain('▾ Kanban')
+    expect(expanded).toContain('Release gate')
+    expect(expanded).toContain('Merge after approval')
+    expect(collapsed.split('\n')).toHaveLength(1)
+    expect(collapsed).toContain('Kanban')
+    expect(collapsed).toContain('restore')
+  })
+
+  it('bounds expanded rows and tells the user when more exist', () => {
+    const roots = Array.from({ length: 8 }, (_, index) => task({ task_id: `task-${index}`, title: `Task ${index}` }))
+    const frame = renderFrame(
+      <KanbanExecutionSpine
+        activity={activity([{ board: 'default', roots }])}
+        maxRows={3}
+        now={NOW}
+        t={DEFAULT_THEME}
+        width={70}
+      />
+    )
+
+    expect(frame).toContain('Task 0')
+    expect(frame).not.toContain('Task 7')
+    expect(frame).toContain('+5 more')
   })
 
   it('renders branching children with legible connectors', () => {

@@ -6,6 +6,7 @@ import time
 import pytest
 
 from hermes_cli import kanban_db as kb
+from hermes_cli.kanban_db_connect import connect_closing
 
 
 @pytest.fixture
@@ -39,7 +40,7 @@ def test_empty_snapshot_is_stable_and_read_only(isolated_board):
 
 
 def test_pinned_database_cannot_be_relabelled_as_another_board(isolated_board):
-    with kb.connect_closing() as conn:
+    with connect_closing() as conn:
         task_id = kb.create_task(conn, title="Default private task", assignee="worker")
         conn.execute("UPDATE tasks SET status='running' WHERE id=?", (task_id,)); _run(conn, task_id, heartbeat=int(time.time())); conn.commit()
     with pytest.raises(PermissionError):
@@ -49,7 +50,7 @@ def test_pinned_database_cannot_be_relabelled_as_another_board(isolated_board):
 
 def test_projection_is_allowlisted_and_redacts_block_reason(isolated_board):
     now = int(time.time())
-    with kb.connect_closing() as conn:
+    with connect_closing() as conn:
         parent = kb.create_task(conn, title="Parent", assignee="architect")
         child = kb.create_task(conn, title="Child", assignee="implementer", parents=[parent])
         conn.execute("UPDATE tasks SET status='done' WHERE id=?", (parent,)); conn.execute("UPDATE tasks SET status='blocked' WHERE id=?", (child,))
@@ -63,12 +64,12 @@ def test_projection_is_allowlisted_and_redacts_block_reason(isolated_board):
 
 def test_old_completed_and_backlog_only_work_are_hidden(isolated_board):
     now = int(time.time())
-    with kb.connect_closing() as conn:
+    with connect_closing() as conn:
         recent = kb.create_task(conn, title="Recent", assignee="worker"); old = kb.create_task(conn, title="Old", assignee="worker")
         conn.execute("UPDATE tasks SET status='done' WHERE id IN (?,?)", (recent, old)); _run(conn, recent, ended_at=now - 5, outcome="completed"); _run(conn, old, ended_at=now - kb.ACTIVITY_RECENT_COMPLETION_SECONDS - 10, outcome="completed"); conn.commit()
     ids = [node["task_id"] for node in kb.get_activity_snapshot(board="default")["roots"]]
     assert recent in ids and old not in ids
-    with kb.connect_closing() as conn:
+    with connect_closing() as conn:
         conn.execute("UPDATE task_runs SET ended_at=? WHERE task_id=?", (now - 1000, recent))
         for status in ("triage", "todo", "scheduled", "ready", "review"):
             task_id = kb.create_task(conn, title=status, assignee="worker"); conn.execute("UPDATE tasks SET status=? WHERE id=?", (status, task_id))
@@ -78,7 +79,7 @@ def test_old_completed_and_backlog_only_work_are_hidden(isolated_board):
 
 def test_connected_statuses_and_multi_parent_edges_are_retained(isolated_board):
     now = int(time.time())
-    with kb.connect_closing() as conn:
+    with connect_closing() as conn:
         a = kb.create_task(conn, title="Parent A", assignee="worker"); b = kb.create_task(conn, title="Parent B", assignee="worker")
         shared = kb.create_task(conn, title="Shared", assignee="reviewer", parents=[a, b]); scheduled = kb.create_task(conn, title="Scheduled", assignee="worker", parents=[shared])
         conn.execute("UPDATE tasks SET status='running' WHERE id=?", (a,)); conn.execute("UPDATE tasks SET status='review' WHERE id=?", (shared,)); conn.execute("UPDATE tasks SET status='scheduled' WHERE id=?", (scheduled,)); _run(conn, a, heartbeat=now); conn.commit()
@@ -87,7 +88,7 @@ def test_connected_statuses_and_multi_parent_edges_are_retained(isolated_board):
 
 
 def test_recursive_graph_expansion_is_capped_and_keeps_external_parent(isolated_board):
-    with kb.connect_closing() as conn:
+    with connect_closing() as conn:
         ids = [kb.create_task(conn, title=f"Node {i}", assignee="worker") for i in range(kb.ACTIVITY_MAX_TASKS + 30)]
         conn.execute("UPDATE tasks SET status='running' WHERE id=?", (ids[0],)); _run(conn, ids[0], heartbeat=int(time.time()))
         conn.executemany("INSERT INTO task_links(parent_id,child_id) VALUES (?,?)", zip(ids, ids[1:]))
@@ -99,7 +100,7 @@ def test_recursive_graph_expansion_is_capped_and_keeps_external_parent(isolated_
 
 def test_parent_edge_cap_is_per_child(isolated_board):
     now = int(time.time())
-    with kb.connect_closing() as conn:
+    with connect_closing() as conn:
         a = kb.create_task(conn, title="Child A", assignee="worker"); z = kb.create_task(conn, title="Child Z", assignee="worker")
         conn.execute("UPDATE tasks SET status='running' WHERE id IN (?,?)", (a, z)); _run(conn, a, heartbeat=now); _run(conn, z, heartbeat=now)
         parents = [kb.create_task(conn, title=f"Parent {i}", assignee="worker") for i in range(kb.ACTIVITY_MAX_PARENTS_PER_TASK + 4)]; later = kb.create_task(conn, title="Later", assignee="worker")
@@ -111,7 +112,7 @@ def test_parent_edge_cap_is_per_child(isolated_board):
 
 def test_graph_scan_cap_sets_truncation(isolated_board):
     count = kb.ACTIVITY_MAX_GRAPH_SCAN + 5; ids = [f"bulk-{i:04d}" for i in range(count)]; now = int(time.time())
-    with kb.connect_closing() as conn:
+    with connect_closing() as conn:
         conn.executemany("INSERT INTO tasks(id,title,assignee,status,created_at) VALUES (?,?,'worker',?,?)", [(x, x, "running" if i == 0 else "todo", now + i) for i, x in enumerate(ids)])
         _run(conn, ids[0], heartbeat=now); conn.executemany("INSERT INTO task_links(parent_id,child_id) VALUES (?,?)", zip(ids, ids[1:])); conn.commit()
     snap = kb.get_activity_snapshot(board="default")
@@ -119,7 +120,7 @@ def test_graph_scan_cap_sets_truncation(isolated_board):
 
 
 def test_cycles_fail_boundedly_without_duplicates(isolated_board):
-    with kb.connect_closing() as conn:
+    with connect_closing() as conn:
         a = kb.create_task(conn, title="A", assignee="worker"); b = kb.create_task(conn, title="B", assignee="worker")
         conn.execute("UPDATE tasks SET status='running' WHERE id=?", (a,)); _run(conn, a, heartbeat=int(time.time())); conn.execute("INSERT INTO task_links VALUES (?,?)", (a, b)); conn.execute("INSERT INTO task_links VALUES (?,?)", (b, a)); conn.commit()
     seen = [n["task_id"] for n in _flatten(kb.get_activity_snapshot(board="default")["roots"])]

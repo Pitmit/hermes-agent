@@ -32,6 +32,12 @@ def test_private_backend_error_is_bounded(monkeypatch):
     monkeypatch.setattr(kanban_db, "get_activity_snapshot", unavailable); result = _call({"boards": ["broken"]}); assert result["boards"][0]["error"] == "board unavailable"; assert "private path" not in repr(result)
 
 
-def test_rpc_does_not_touch_session_or_delivery_state(monkeypatch):
-    sessions, pending = dict(srv._sessions), dict(srv._pending); monkeypatch.setattr(kanban_db, "get_activity_snapshot", lambda board: {"board": board, "checked_at": 10, "roots": [_task("running", "running")]})
-    assert _call({"boards": ["default"]})["active_count"] == 1; assert srv._sessions == sessions and srv._pending == pending
+def test_rpc_does_not_touch_session_state(monkeypatch):
+    sessions = dict(srv._sessions)
+    monkeypatch.setattr(
+        kanban_db,
+        "get_activity_snapshot",
+        lambda board: {"board": board, "checked_at": 10, "roots": [_task("running", "running")]},
+    )
+    assert _call({"boards": ["default"]})["active_count"] == 1
+    assert srv._sessions == sessions

@@ -57,6 +57,7 @@ The classic CLI remains the shipped default. Anything documented in [CLI Interfa
 - **Non-blocking input** — type and queue messages before the session is ready. Your first prompt sends the moment the agent comes online.
 - **Rich overlays** — model picker, session picker, approval and clarification prompts all render as modal panels rather than inline flows.
 - **Live session panel** — tools and skills fill in progressively as they initialize.
+- **Live Kanban dock** — running, blocked, waiting, and recently completed task chains stay visible above the status bar without manual `/kanban list` polling.
 - **Mouse-friendly selection** — drag to highlight with a uniform background instead of SGR inverse. Copy with your terminal's normal copy gesture.
 - **Alternate-screen rendering** — differential updates mean no flicker when streaming, no scrollback clutter after you quit.
 - **Composer affordances** — inline paste-collapse for long snippets, `Cmd+V` / `Ctrl+V` text paste with clipboard-image fallback, bracketed-paste safety, and image/file-path attachment normalization.
@@ -105,8 +106,9 @@ Keybindings match the [Classic CLI](cli.md#keybindings) exactly. The only behavi
 On macOS, `F7` means the physical F7 function key. MacBook keyboards may use that row for system controls instead; hold **Fn** (the **globe** key on newer keyboards) while pressing **F7**, or enable **Use F1, F2, etc. keys as standard function keys** in **System Settings → Keyboard → Keyboard Shortcuts → Function Keys**. If the terminal still does not forward it, use the equivalent **Ctrl+R** binding below.
 
 - **`Ctrl+T`** expands the automatic live-work dock (subagents, plus a **Processes** block for `terminal(background=true)` spawns) into the full-height `/agents` roster. Select a worker and press **Enter** (or **`t`**) for its live transcript, **`d`** for rich details, **`e`** to steer, or **`x`** to stop it. The dock fits its row count to terminal height and preserves your composer draft. See [Monitoring subagents](./features/delegation.md#monitoring-running-subagents-agents).
+- The read-only **Kanban dock** appears automatically when the current board has running work, blocked/failed tasks, connected waiting tasks, or a recently completed run. It refreshes with the existing 1.5-second live-status poll, shows bounded dependency rails and heartbeat degradation, and never mutates the board.
 - A standing **`/goal`** gets its own row above the live dock (`⊙ goal · 3/20 turns · …`, or `⏳ goal parked` / `⏸ goal paused` with the reason); it leaves once the goal is done or cleared. Queued follow-ups are listed above it.
-- **`Ctrl+R`** toggles the live dock between its default preview and one summary line. **`F7`** remains an optional alias where the terminal sends function keys through. This does not open the monitor or move composer focus; the choice lasts for this TUI process without changing config.
+- **`Ctrl+R`** toggles the live subagent/process and Kanban docks between their default previews and one-line summaries. **`F7`** remains an optional alias where the terminal sends function keys through. This does not open the monitor or move composer focus; the choice lasts for this TUI process without changing config.
 - **Mouse drag** highlights text with a uniform selection background.
 - **`Cmd+V` / `Ctrl+V`** first tries normal text paste, then falls back to OSC52/native clipboard reads, and finally image attach when the clipboard or pasted payload resolves to an image.
 - **`/terminal-setup`** installs local VS Code / Cursor / Windsurf terminal bindings for better `Cmd+Enter` and undo/redo parity on macOS.
