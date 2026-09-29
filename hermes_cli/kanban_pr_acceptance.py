@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from typing import Any
 from urllib.parse import quote
 
 _REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
@@ -22,15 +23,44 @@ def validate_contract(value: str | None) -> str:
     return value
 
 
-def _api(endpoint: str, *, query: str | None = None, paginate: bool = False):
+def _json_values(text: str) -> list[Any]:
+    decoder = json.JSONDecoder()
+    values = []
+    index = 0
+    while index < len(text):
+        while index < len(text) and text[index].isspace():
+            index += 1
+        if index < len(text):
+            value, index = decoder.raw_decode(text, index)
+            values.append(value)
+    if not values:
+        raise ValueError("GitHub returned no JSON evidence")
+    return values
+
+
+def _api(endpoint: str, *, query: str | None = None, paginate: bool = False,
+         allow_plan_limited_feature: bool = False) -> Any:
     command = ["gh", "api", endpoint, "--hostname", "github.com"]
     if query is not None:
         command += ["-f", "query=" + query]
     if paginate:
-        command += ["--paginate", "--slurp"]
+        command += ["--paginate"]
     result = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True,
-                            text=True, encoding="utf-8", errors="replace", timeout=30, check=True)
-    value = json.loads(result.stdout)
+                            text=True, encoding="utf-8", errors="replace", timeout=30, check=False)
+    if result.returncode:
+        try:
+            errors = _json_values(result.stdout)
+            error = errors[0] if len(errors) == 1 else None
+        except (TypeError, ValueError):
+            error = None
+        if allow_plan_limited_feature and isinstance(error, dict) and str(error.get("status")) == "403" and \
+                error.get("message") == "Upgrade to GitHub Pro or make this repository public to enable this feature.":
+            return []
+        raise subprocess.CalledProcessError(result.returncode, command)
+    values = _json_values(result.stdout)
+    if not paginate and len(values) != 1:
+        raise ValueError("GitHub returned multiple JSON documents for a single response")
+    value = values if paginate else values[0]
     if isinstance(value, dict) and value.get("errors"):
         raise ValueError("GitHub returned incomplete GraphQL evidence")
     return value
@@ -61,7 +91,8 @@ def collect_acceptance(contract: str, published_pr: str | None) -> dict:
             raise ValueError("PR is closed or current head is unavailable")
         protection = (pr.get("baseRef") or {}).get("branchProtectionRule") or {}
         required = {(r["context"], (r.get("app") or {}).get("databaseId")) for r in protection.get("requiredStatusChecks", [])}
-        rules = _api(f"repos/{repo}/rules/branches/{quote(branch, safe='')}?per_page=100", paginate=True)
+        rules = _api(f"repos/{repo}/rules/branches/{quote(branch, safe='')}?per_page=100", paginate=True,
+                     allow_plan_limited_feature=True)
         for page in rules:
             for rule in page:
                 if rule["type"] == "required_status_checks":
