@@ -10,6 +10,7 @@ from . import (  # noqa: F401
     display,
     events,
     groups_bot_relay,
+    kanban_activity,
     liveness,
     profiles_vault_complete_foreign_subagents,
     projects_pets,

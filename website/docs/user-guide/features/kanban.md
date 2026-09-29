@@ -750,6 +750,12 @@ The orchestrator guidance ships in the worker's system prompt automatically — 
 
 For best results, pair it with a profile whose toolsets are restricted to board operations (`kanban`, `gateway`, `memory`) so the orchestrator literally cannot execute implementation tasks even if it tries.
 
+## TUI live dock
+
+`hermes --tui` polls a bounded, read-only activity projection and automatically shows a Kanban dock above the status bar when the current board has running work, blocked/failed tasks, connected waiting tasks, or a recently completed run. The expanded view shows dependency rails, assignees, blocked reasons, and stale/missing heartbeat warnings; `Ctrl+R` or `F7` collapses it to one summary line and restores it again. The projection deliberately excludes task bodies, comments, logs, commands, process IDs, environment values, and raw worker errors, and polling never initializes or mutates a board.
+
+The dock is for glanceable execution status, not board administration. Use `/kanban show <id>` for the complete task record or the dashboard below for drag/drop and editing.
+
 ## Dashboard (GUI)
 
 The `/kanban` CLI and slash command are enough to run the board headlessly, but a visual board is often the right interface for humans-in-the-loop: triage, cross-profile supervision, reading comment threads, and dragging cards between columns. Hermes ships this as a **bundled dashboard plugin** at `plugins/kanban/` — not a core feature, not a separate service — following the model laid out in [Extending the Dashboard](./extending-the-dashboard).

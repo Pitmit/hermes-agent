@@ -1661,6 +1661,43 @@ export interface BrowserControllerParams {
 export interface BrowserControllerDetachResult {
   detached?: boolean
 }
+export interface KanbanActivityParams {
+  boards?: string[] | null
+}
+export interface KanbanActivityResponse {
+  boards?: KanbanActivityBoard[]
+  active_count?: number
+  attention_count?: number
+  checked_at: number
+  diagnostics?: string[]
+}
+export interface KanbanActivityBoard {
+  board: string
+  checked_at: number
+  roots?: KanbanActivityTask[]
+  truncated?: boolean
+  error?: string | null
+}
+export interface KanbanActivityTask {
+  task_id: string
+  title: string
+  status: KanbanTaskStatus
+  assignee?: string | null
+  block_reason?: string | null
+  parents?: string[]
+  children?: KanbanActivityTask[]
+  run?: KanbanActivityRun | null
+}
+export type KanbanTaskStatus = 'triage' | 'todo' | 'scheduled' | 'ready' | 'running' | 'blocked' | 'review' | 'done' | 'archived'
+export interface KanbanActivityRun {
+  run_id?: number | null
+  profile?: string | null
+  started_at?: number | null
+  ended_at?: number | null
+  outcome?: string | null
+  last_heartbeat_at?: number | null
+  max_runtime_seconds?: number | null
+}
 export type PingParams = Record<string, never>
 export interface PingResult {
   pong: boolean
@@ -4853,6 +4890,8 @@ export interface RpcMethods {
   'input.detect_drop': { params: InputDetectDropParams; result: InputDetectDropResult }
   /** Session/message counts over the last ``days`` for the (optionally scoped) profile store. */
   'insights.get': { params: InsightsGetParams; result: InsightsGetResult }
+  /** Bounded read-only Kanban activity projection for the live TUI dock. */
+  'kanban.activity': { params: KanbanActivityParams; result: KanbanActivityResponse }
   /** Archive a skill (restorable via curator) or remove a memory chunk. */
   'learning.delete': { params: LearningNodeParams; result: LearningMutationResult }
   /** Node content (SKILL.md or memory chunk) for an edit prefill. */
@@ -5245,6 +5284,7 @@ export const RPC_METHODS = [
   'image.generate',
   'input.detect_drop',
   'insights.get',
+  'kanban.activity',
   'learning.delete',
   'learning.detail',
   'learning.edit',

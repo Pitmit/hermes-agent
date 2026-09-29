@@ -21,7 +21,7 @@ import { SECTION_NAMES, sectionMode } from '../domain/details.js'
 import { composeTabTitle, fmtProjectCwdBranch, shortCwd } from '../domain/paths.js'
 import { sessionScopedModelArg } from '../domain/slash.js'
 import { type GatewayClient } from '../gatewayClient.js'
-import type { SubagentListResponse } from '../gatewayTypes.js'
+import type { KanbanActivityResponse, SubagentListResponse } from '../gatewayTypes.js'
 import type {
   AnyGatewayEvent,
   ClarifyLockResponse,
@@ -57,6 +57,7 @@ import { planGatewayRecovery } from './gatewayRecovery.js'
 import { applyGoalSnapshot } from './goalStatus.js'
 import { getInputSelection } from './inputSelectionStore.js'
 import { type GatewayRpc, type StateSetter, type TranscriptRow } from './interfaces.js'
+import { applyKanbanActivity } from './kanbanRoster.js'
 import { $overlayState, patchOverlayState } from './overlayStore.js'
 import { $goodVibesTick } from './petFlashStore.js'
 import { applyProcessSnapshot, type ProcessEntry } from './processRoster.js'
@@ -613,6 +614,7 @@ export function useMainApp(gw: GatewayClient) {
     let stopped = false
     applyAgentSnapshot(ui.sid)
     applyProcessSnapshot(ui.sid)
+    applyKanbanActivity()
     applyGoalSnapshot(ui.sid)
     // Goal state changes only on /goal and after a judged turn, both of which push
     // `session.control.update`; read it once per session instead of polling state.db.
@@ -644,6 +646,15 @@ export function useMainApp(gw: GatewayClient) {
 
           if (!stopped && result && getUiState().sid === sid) {
             applyProcessSnapshot(sid, result.processes ?? [])
+          }
+        })
+        .catch(() => {})
+      gw.request<KanbanActivityResponse>('kanban.activity', {})
+        .then(raw => {
+          const result = asRpcResult<KanbanActivityResponse>(raw)
+
+          if (!stopped && result) {
+            applyKanbanActivity(result)
           }
         })
         .catch(() => {})
