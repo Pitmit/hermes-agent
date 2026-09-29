@@ -14,6 +14,7 @@ import json
 import re
 import subprocess
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote
 
 _REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
@@ -28,28 +29,54 @@ def validate_contract(value: str | None) -> str:
     return value
 
 
+def _json_values(text: str) -> list[Any]:
+    decoder = json.JSONDecoder()
+    values = []
+    index = 0
+    while index < len(text):
+        while index < len(text) and text[index].isspace():
+            index += 1
+        if index < len(text):
+            value, index = decoder.raw_decode(text, index)
+            values.append(value)
+    if not values:
+        raise ValueError("GitHub returned no JSON evidence")
+    return values
+
+
 def _api(endpoint: str, *, query: str | None = None, paginate: bool = False,
-         profile_home: str | None = None):
+         profile_home: str | None = None, allow_plan_limited_feature: bool = False) -> Any:
     command = ["gh", "api", endpoint, "--hostname", "github.com"]
     if query is not None:
         command += ["-f", "query=" + query]
     if paginate:
-        command += ["--paginate", "--slurp"]
-    try:
-        result = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True,
-                                text=True, encoding="utf-8", errors="replace", timeout=30,
-                                check=True, env=_gh_env(profile_home))
-    except subprocess.CalledProcessError as exc:
+        # No --slurp: gh < 2.48 lacks it; concatenated page documents are parsed below.
+        command += ["--paginate"]
+    result = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True,
+                            text=True, encoding="utf-8", errors="replace", timeout=30,
+                            check=False, env=_gh_env(profile_home))
+    if result.returncode:
+        try:
+            errors = _json_values(result.stdout)
+            error = errors[0] if len(errors) == 1 else None
+        except (TypeError, ValueError):
+            error = None
+        if allow_plan_limited_feature and isinstance(error, dict) and str(error.get("status")) == "403" and \
+                error.get("message") == "Upgrade to GitHub Pro or make this repository public to enable this feature.":
+            return []
         # 401/403/404 = the login cannot see this repository (wrong profile identity
         # or missing grant), not a transient API failure. Persist only the status
         # code + endpoint, never gh's stderr (credentials/host details).
-        denied = re.search(r"HTTP (40[134])", exc.stderr or "")
+        denied = re.search(r"HTTP (40[134])", result.stderr or "")
         if denied:
             raise _GateAuthError(f"HTTP {denied[1]} on {endpoint.split('?')[0]}") from None
-        if exc.returncode == 4:  # gh's authentication-required exit: this profile has no login
+        if result.returncode == 4:  # gh's authentication-required exit: this profile has no login
             raise _GateAuthError(f"gh has no login for {endpoint.split('?')[0]}") from None
-        raise
-    value = json.loads(result.stdout)
+        raise subprocess.CalledProcessError(result.returncode, command)
+    values = _json_values(result.stdout)
+    if not paginate and len(values) != 1:
+        raise ValueError("GitHub returned multiple JSON documents for a single response")
+    value = values if paginate else values[0]
     if isinstance(value, dict) and value.get("errors"):
         raise ValueError("GitHub returned incomplete GraphQL evidence")
     return value
@@ -134,7 +161,7 @@ def collect_acceptance(contract: str, published_pr: str | None,
         protection = (pr.get("baseRef") or {}).get("branchProtectionRule") or {}
         required = {(r["context"], (r.get("app") or {}).get("databaseId")) for r in protection.get("requiredStatusChecks", [])}
         rules = _api(f"repos/{repo}/rules/branches/{quote(branch, safe='')}?per_page=100",
-                     paginate=True, profile_home=profile_home)
+                     paginate=True, profile_home=profile_home, allow_plan_limited_feature=True)
         for page in rules:
             for rule in page:
                 if rule["type"] == "required_status_checks":
