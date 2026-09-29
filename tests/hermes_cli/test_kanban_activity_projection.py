@@ -1,12 +1,24 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 import time
 
 import pytest
 
 from hermes_cli import kanban_db as kb
 from hermes_cli.kanban_db_connect import connect_closing
+
+
+def test_activity_module_is_safe_to_import_before_kanban_facade():
+    result = subprocess.run(
+        [sys.executable, "-c", "import hermes_cli.kanban_activity as activity; assert callable(activity.get_activity_snapshot)"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.fixture

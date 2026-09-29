@@ -9,8 +9,6 @@ import sqlite3
 import time
 from typing import Any, Optional
 
-from hermes_cli import kanban_db as _kb
-
 ACTIVITY_MAX_TASKS = 200
 ACTIVITY_MAX_GRAPH_SCAN = ACTIVITY_MAX_TASKS * 4
 ACTIVITY_MAX_PARENTS_PER_TASK = 16
@@ -18,9 +16,16 @@ ACTIVITY_BLOCK_REASON_MAX_CHARS = 240
 ACTIVITY_RECENT_COMPLETION_SECONDS = 300
 
 
+def _board():
+    """Resolve the Kanban facade lazily so this module is safe to import first."""
+    from hermes_cli import kanban_db
+
+    return kanban_db
+
+
 def normalize_board_slug(slug: Optional[str]) -> Optional[str]:
     """Public, side-effect-free board slug canonicalizer."""
-    return _kb._normalize_board_slug(slug)
+    return _board()._normalize_board_slug(slug)
 
 
 def _bounded_activity_text(value: Any, limit: int) -> Optional[str]:
@@ -65,14 +70,14 @@ def activity_board_scope() -> Optional[str]:
     if not os.environ.get("HERMES_KANBAN_DB", "").strip():
         return None
     try:
-        return _kb._normalize_board_slug(os.environ.get("HERMES_KANBAN_BOARD")) or _kb.DEFAULT_BOARD
+        return _board()._normalize_board_slug(os.environ.get("HERMES_KANBAN_BOARD")) or _board().DEFAULT_BOARD
     except ValueError:
-        return _kb.DEFAULT_BOARD
+        return _board().DEFAULT_BOARD
 
 
 def _activity_db_path(board: str) -> Path:
     """Resolve an activity board without letting a DB pin alias another slug."""
-    slug = _kb._normalize_board_slug(board)
+    slug = _board()._normalize_board_slug(board)
     if not slug:
         raise ValueError("board slug is required")
     pinned = activity_board_scope()
@@ -80,7 +85,7 @@ def _activity_db_path(board: str) -> Path:
         if slug != pinned:
             raise PermissionError(f"board {slug!r} is outside pinned activity scope")
         return Path(os.environ["HERMES_KANBAN_DB"]).expanduser()
-    return _kb.kanban_db_path(board=slug)
+    return _board().kanban_db_path(board=slug)
 
 
 def _open_activity_reader(board: str) -> sqlite3.Connection:
@@ -90,7 +95,7 @@ def _open_activity_reader(board: str) -> sqlite3.Connection:
     presentation poll therefore cannot create a missing board or write schema,
     WAL, task, run, event, or subscription state.
     """
-    slug = _kb._normalize_board_slug(board)
+    slug = _board()._normalize_board_slug(board)
     if not slug:
         raise ValueError("board slug is required")
     path = _activity_db_path(slug).resolve()
@@ -109,7 +114,7 @@ def get_activity_snapshot(*, board: str) -> dict:
     are ignored; cyclic components are rooted deterministically and every task
     is emitted at most once, preventing recursive or exponential expansion.
     """
-    slug = _kb._normalize_board_slug(board)
+    slug = _board()._normalize_board_slug(board)
     if not slug:
         raise ValueError("board slug is required")
     checked_at = int(time.time())

@@ -11,8 +11,14 @@ def _task(task_id, status, *, outcome=None, children=None):
 
 
 def test_empty_implicit_response_omits_uninitialized_board(monkeypatch, tmp_path):
-    missing = tmp_path / "missing.db"; monkeypatch.setattr(kanban_db, "activity_board_scope", lambda: None); monkeypatch.setattr(kanban_db, "list_boards", lambda include_archived=False: [{"slug": "default"}]); monkeypatch.setattr(kanban_db, "kanban_db_path", lambda board=None: missing)
-    result = _call({}); assert result["boards"] == []; assert result["active_count"] == result["attention_count"] == 0; assert not missing.exists()
+    missing = tmp_path / "missing.db"
+    monkeypatch.setattr(kanban_db, "activity_board_scope", lambda: None)
+    monkeypatch.setattr(kanban_db, "get_current_board", lambda: "default")
+    monkeypatch.setattr(kanban_db, "kanban_db_path", lambda board=None: missing)
+    result = _call({})
+    assert result["boards"] == []
+    assert result["active_count"] == result["attention_count"] == 0
+    assert not missing.exists()
 
 
 def test_implicit_pinned_scope_reads_only_pinned_board(monkeypatch, tmp_path):
@@ -30,6 +36,11 @@ def test_multi_board_canonicalization_and_overflow(monkeypatch):
 def test_private_backend_error_is_bounded(monkeypatch):
     def unavailable(*, board): raise RuntimeError("private path or database detail")
     monkeypatch.setattr(kanban_db, "get_activity_snapshot", unavailable); result = _call({"boards": ["broken"]}); assert result["boards"][0]["error"] == "board unavailable"; assert "private path" not in repr(result)
+
+
+def test_non_list_boards_param_is_rejected():
+    response = srv._methods["kanban.activity"](1, {"boards": "default"})
+    assert response["error"]["code"] == 4000
 
 
 def test_rpc_does_not_touch_session_state(monkeypatch):

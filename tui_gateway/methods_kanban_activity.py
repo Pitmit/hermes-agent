@@ -55,6 +55,8 @@ def _kanban_activity(rid, params: dict) -> dict:
     explicit = requested is not None
     diagnostics: list[str] = []
     if explicit:
+        if not isinstance(requested, list) or any(not isinstance(board, str) for board in requested):
+            return _err(rid, 4000, "boards must be a list of board slugs")  # type: ignore[name-defined]
         canonical: set[str] = set()
         for board in requested:
             candidate = board.strip()
@@ -72,16 +74,7 @@ def _kanban_activity(rid, params: dict) -> dict:
             board_names = board_names[:_KANBAN_ACTIVITY_MAX_BOARDS]
     else:
         pinned = kanban_db.activity_board_scope()
-        if pinned is not None:
-            board_names = [pinned]
-        else:
-            board_names = [
-                str(metadata["slug"])
-                for metadata in kanban_db.list_boards(include_archived=False)
-            ]
-            if len(board_names) > _KANBAN_ACTIVITY_MAX_BOARDS:
-                diagnostics.append(f"board-limit:{_KANBAN_ACTIVITY_MAX_BOARDS}")
-                board_names = board_names[:_KANBAN_ACTIVITY_MAX_BOARDS]
+        board_names = [pinned or kanban_db.get_current_board()]
 
     snapshots: list[dict] = []
     for board in board_names:

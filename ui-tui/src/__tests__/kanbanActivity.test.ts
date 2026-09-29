@@ -27,6 +27,14 @@ describe('kanban activity model', () => {
     expect(activityPresentation(done, NOW)).toMatchObject({ glyph: '●', stateLabel: 'completed' })
     const missing = firstRoot(task({ run: null, status: 'running' }))
     expect(activityPresentation(missing, NOW)).toMatchObject({ glyph: '!', stateLabel: 'heartbeat unavailable' })
+    const starting = firstRoot(
+      task({ run: { ...task().run!, last_heartbeat_at: null, started_at: NOW - 5 }, status: 'running' })
+    )
+    expect(activityPresentation(starting, NOW)).toMatchObject({ glyph: '◉', stateLabel: 'running' })
+    const overdue = firstRoot(
+      task({ run: { ...task().run!, last_heartbeat_at: null, started_at: NOW - 61 }, status: 'running' })
+    )
+    expect(activityPresentation(overdue, NOW)).toMatchObject({ glyph: '!', stateLabel: 'heartbeat unavailable' })
   })
   it('reserves accent for live work and keeps queued states neutral', () => {
     expect(activityPresentation(firstRoot(task()), NOW).tone).toBe('accent')

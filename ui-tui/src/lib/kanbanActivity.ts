@@ -276,8 +276,14 @@ export function heartbeatFreshness(
     return 'not-applicable'
   }
 
-  if (!task.run || task.run.lastHeartbeatAt === null) {
+  if (!task.run) {
     return 'missing'
+  }
+
+  if (task.run.lastHeartbeatAt === null) {
+    const startupGraceSeconds = Math.min(staleAfterSeconds, 60)
+
+    return task.run.startedAt !== null && now - task.run.startedAt <= startupGraceSeconds ? 'fresh' : 'missing'
   }
 
   return now - task.run.lastHeartbeatAt > staleAfterSeconds ? 'stale' : 'fresh'
