@@ -60,6 +60,105 @@ def test_get_nous_subscription_features_recognizes_direct_exa_backend(monkeypatc
     assert features.web.current_provider == "exa"
 
 
+def test_registered_generation_provider_uses_the_selected_registry(monkeypatch):
+    from agent import image_gen_registry, video_gen_registry
+    from hermes_cli import plugins
+
+    image, video = object(), object()
+    discovered = []
+    monkeypatch.setattr(plugins, "_ensure_plugins_discovered", lambda: discovered.append(True))
+    monkeypatch.setattr(image_gen_registry, "get_provider", lambda name: image if name == "image-plugin" else None)
+    monkeypatch.setattr(video_gen_registry, "get_provider", lambda name: video if name == "video-plugin" else None)
+
+    assert ns._registered_generation_provider("image_gen", "image-plugin") is image
+    assert ns._registered_generation_provider("video_gen", "video-plugin") is video
+    assert ns._registered_generation_provider("unknown", "video-plugin") is None
+    assert ns._registered_generation_provider("video_gen", "fal") is None
+    assert len(discovered) == 3
+
+
+def test_registered_generation_provider_fails_closed_on_discovery_error(monkeypatch):
+    from hermes_cli import plugins
+
+    monkeypatch.setattr(
+        plugins, "_ensure_plugins_discovered", lambda: (_ for _ in ()).throw(RuntimeError("broken")),
+    )
+    assert ns._registered_generation_provider("video_gen", "higgsfield") is None
+
+
+def test_generation_status_uses_selected_plugin_provider(monkeypatch):
+    """A ready plugin backend is the active route, not an unconfigured FAL route."""
+    class _Provider:
+        display_name = "Higgsfield"
+
+        @staticmethod
+        def is_available():
+            return True
+
+    monkeypatch.setattr(ns, "_registered_generation_provider", lambda key, selected: _Provider())
+
+    feature = ns._fal_feature(
+        "video_gen", tool_enabled=True, direct=False, managed=False, selected="higgsfield",
+    )
+
+    assert feature.available is True
+    assert feature.active is True
+    assert feature.managed_by_nous is False
+    assert feature.current_provider == "Higgsfield"
+    assert feature.explicit_configured is True
+
+
+def test_generation_status_fails_closed_when_selected_plugin_is_unavailable(monkeypatch):
+    class _Provider:
+        display_name = "Offline Provider"
+
+        @staticmethod
+        def is_available():
+            return False
+
+    monkeypatch.setattr(ns, "_registered_generation_provider", lambda key, selected: _Provider())
+
+    feature = ns._fal_feature(
+        "video_gen", tool_enabled=True, direct=False, managed=False, selected="offline",
+    )
+
+    assert feature.available is False
+    assert feature.active is False
+    assert feature.current_provider == "Offline Provider"
+
+
+def test_generation_status_keeps_ready_plugin_inactive_when_toolset_is_disabled(monkeypatch):
+    class _Provider:
+        display_name = "Higgsfield"
+
+        @staticmethod
+        def is_available():
+            return True
+
+    monkeypatch.setattr(ns, "_registered_generation_provider", lambda key, selected: _Provider())
+    feature = ns._fal_feature(
+        "video_gen", tool_enabled=False, direct=False, managed=False, selected="higgsfield",
+    )
+    assert feature.available is True
+    assert feature.active is False
+
+
+def test_generation_status_fails_closed_when_provider_probe_raises(monkeypatch):
+    class _Provider:
+        display_name = "Broken"
+
+        @staticmethod
+        def is_available():
+            raise RuntimeError("probe failed")
+
+    monkeypatch.setattr(ns, "_registered_generation_provider", lambda key, selected: _Provider())
+    feature = ns._fal_feature(
+        "video_gen", tool_enabled=True, direct=False, managed=False, selected="broken",
+    )
+    assert feature.available is False
+    assert feature.active is False
+
+
 def test_get_nous_subscription_features_recognizes_keyless_tavily_backend(monkeypatch):
     """Selecting Tavily in setup/tools counts as available with no API key.
 

@@ -285,8 +285,45 @@ def _web_feature(web_cfg: Dict[str, object], tool_enabled: bool, managed: bool, 
     )
 
 
+def _registered_generation_provider(key: str, selected: Optional[str]):
+    """Return an explicitly selected image/video provider after normal plugin discovery.
+
+    Status surfaces must use the same registry as ``image_generate`` / ``video_generate``;
+    otherwise every non-FAL plugin is mislabeled as an unconfigured FAL route.
+    """
+    if selected in (None, "nous", "fal"):
+        return None
+    try:
+        from hermes_cli.plugins import _ensure_plugins_discovered
+
+        _ensure_plugins_discovered()
+        if key == "image_gen":
+            from agent.image_gen_registry import get_provider
+        elif key == "video_gen":
+            from agent.video_gen_registry import get_provider
+        else:
+            return None
+        return get_provider(selected)
+    except Exception:
+        return None
+
+
 def _fal_feature(key: str, tool_enabled: bool, direct: bool, managed: bool, selected: Optional[str]) -> NousFeatureState:
-    # image_gen / video_gen: same FAL_KEY, independently gated managed availability.
+    # image_gen / video_gen: plugin selections take precedence over the legacy FAL/Nous routes.
+    provider = _registered_generation_provider(key, selected)
+    if provider is not None:
+        try:
+            available = bool(provider.is_available())
+        except Exception:
+            available = False
+        return _state(
+            key, available=available, active=bool(tool_enabled and available),
+            managed_by_nous=False, toolset_enabled=tool_enabled,
+            current_provider=str(getattr(provider, "display_name", None) or selected),
+            explicit_configured=True,
+        )
+
+    # Legacy FAL and Nous-managed routes share FAL credentials but are independently gated.
     fal_managed = tool_enabled and managed and not direct
     if selected not in (None, "nous") or (selected is None and direct):
         label = "FAL"
