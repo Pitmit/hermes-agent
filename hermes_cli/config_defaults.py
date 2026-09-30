@@ -1881,6 +1881,16 @@ DEFAULT_CONFIG = {
         # early failure evidence from long-running workers.
         "worker_log_rotate_bytes": 2 * 1024 * 1024,
         "worker_log_backup_count": 1,
+        # Cost governance (governance stage 1): monthly budget gate in the dispatcher
+        # tick. The ledger records run costs either way; this switch only arms the
+        # pre-claim gate. Off (default) leaves the dispatch tick byte-identical.
+        "budgets": {
+            "enabled": False,
+            # 'allow': unknown costs never count toward the hard stop (honest: not 0).
+            # 'flag': same accounting, plus the unknown share is stamped into budget
+            # events so a high unknown share is visible in the event log.
+            "unknown_policy": "allow",
+        },
         # Profile for the root/orchestration task after Triage decomposition; "" = default profile.
         # Does not control the decomposer LLM path (see auxiliary.kanban_decomposer).
         "orchestrator_profile": "",

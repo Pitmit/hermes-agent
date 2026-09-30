@@ -1316,6 +1316,18 @@ def _cmd_decompose(args: argparse.Namespace) -> int:
                              ("task_id", "ok", "reason", "fanout", "child_ids", "new_title"), _decompose_ok_line)
 
 
+def _cmd_budget(args: argparse.Namespace) -> int:
+    """``hermes kanban budget set|show|rm`` — the human-side budget surface.
+
+    Delegates to :func:`hermes_cli.kanban_cost.dispatch_budget`; workers never
+    route through here for writes (the toolset exposes only read-only
+    ``kanban_budget_show`` — no worker self-governance).
+    """
+    from hermes_cli.kanban_cost import dispatch_budget
+
+    return dispatch_budget(args)
+
+
 _HANDLERS = {
     "init": _cmd_init, "create": _cmd_create, "swarm": _cmd_swarm,
     "list": _cmd_list, "ls": _cmd_list, "show": _cmd_show,
@@ -1335,7 +1347,7 @@ _HANDLERS = {
     "assignees": _cmd_assignees, "notify-subscribe": _cmd_notify_subscribe,
     "notify-list": _cmd_notify_list, "notify-unsubscribe": _cmd_notify_unsubscribe,
     "context": _cmd_context, "specify": _cmd_specify, "decompose": _cmd_decompose,
-    "gc": _cmd_gc,
+    "gc": _cmd_gc, "budget": _cmd_budget,
 }
 
 

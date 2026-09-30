@@ -730,6 +730,14 @@ def connect(db_path: Optional[Path] = None, *, board: Optional[str] = None) -> s
                 conn.executescript(_kb.SCHEMA_SQL)
                 _migrate_add_optional_columns(conn)
                 _INITIALIZED_PATHS.add(resolved)
+                # Cost ledger (governance stage 1): one honest 'unknown' row per
+                # historical run — idempotent via INSERT OR IGNORE on the run_id
+                # primary key, NULL amounts (never 0). A worker's own exit flush
+                # later fills only rows still 'unknown'. Runs once per process
+                # per path thanks to _INITIALIZED_PATHS; the INSERT..SELECT is a
+                # no-op write on an already-backfilled board.
+                from hermes_cli.kanban_cost import backfill_run_costs
+                backfill_run_costs(conn, board=board)
 
         conn, _ = _open_configured(path, _init_if_needed)
     return conn

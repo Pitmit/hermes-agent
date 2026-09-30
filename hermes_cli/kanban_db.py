@@ -1078,7 +1078,57 @@ CREATE INDEX IF NOT EXISTS idx_runs_task             ON task_runs(task_id, start
 CREATE INDEX IF NOT EXISTS idx_runs_status           ON task_runs(status);
 CREATE INDEX IF NOT EXISTS idx_attachments_task      ON task_attachments(task_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_notify_task           ON kanban_notify_subs(task_id);
-"""
+
+-- Cost governance (governance stage 1): ONE cost row per task run.
+-- 'unknown' = nothing measured yet, or the worker died before its exit flush
+-- (backfilled row): amounts stay NULL — never 0. A backfilled row is FILLED by
+-- the worker's own exit flush, never lowered (fill-only-from-unknown).
+CREATE TABLE IF NOT EXISTS task_run_costs (
+    run_id INTEGER PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    board TEXT NOT NULL,
+    tenant TEXT,
+    project_id TEXT,
+    profile TEXT,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    cache_read_tokens INTEGER,
+    cache_write_tokens INTEGER,
+    reasoning_tokens INTEGER,
+    api_call_count INTEGER,
+    estimated_cost_usd REAL,
+    actual_cost_usd REAL,
+    cost_status TEXT NOT NULL DEFAULT 'unknown',
+    cost_source TEXT,
+    period TEXT NOT NULL,
+    recorded_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_task_run_costs_period
+    ON task_run_costs(board, period, cost_status);
+CREATE INDEX IF NOT EXISTS idx_task_run_costs_profile
+    ON task_run_costs(board, profile, period);
+CREATE INDEX IF NOT EXISTS idx_task_run_costs_project
+    ON task_run_costs(board, project_id, period);
+CREATE INDEX IF NOT EXISTS idx_task_run_costs_tenant
+    ON task_run_costs(board, tenant, period);
+
+-- Monthly budgets (governance stage 1). period: 'YYYY-MM' (that month only) or
+-- 'persist' (applies every month). scope/ref: 'profile'/<profile name>,
+-- 'project'/<project id>, 'tenant'/<tenant name>, 'board'/'*'.
+-- The worker surface is read-only (kanban_budget_show): budgets are set by the
+-- human via `hermes kanban budget set` — no worker self-governance.
+CREATE TABLE IF NOT EXISTS kanban_budgets (
+    board TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    ref TEXT NOT NULL,
+    period TEXT NOT NULL,
+    limit_usd REAL NOT NULL,
+    warn_ratio REAL NOT NULL DEFAULT 0.8,
+    created_by TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (board, scope, ref, period)
+);"""
 
 
 # --- ID generation ---

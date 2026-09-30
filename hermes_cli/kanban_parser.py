@@ -146,6 +146,36 @@ _BOARD_SPECS = [
     )),
 ]
 
+# ``hermes kanban budget <action>`` records (governance stage 1: monthly cost
+# budgets). Worker tools are read-only; writes are the human CLI surface only.
+_BUDGET_SPECS = [
+    _cmd("set", [
+        _arg("scope", choices=("profile", "project", "tenant", "board"),
+             help="Budget scope: profile | project | tenant | board"),
+        _arg("ref", nargs="?", default=None,
+             help="Scope reference: profile name, project id or tenant name (omitted for board)"),
+        _arg("--limit", type=float, required=True, help="Monthly limit in USD (> 0)"),
+        _arg("--warn", type=float, default=0.8,
+             help="Warn when MTD >= limit * ratio (default 0.8, i.e. 80 percent)"),
+        _arg("--period", help="Budget month 'YYYY-MM' (default: current UTC month)"),
+        _arg("--monthly", action="store_true",
+             help="Recurring budget applying to every month instead of one period"),
+    ], help="Set (upsert) one monthly budget row"),
+    _cmd("show", [
+        _arg("--period", help="Report month 'YYYY-MM' (default: current UTC month)"),
+        _json_flag(),
+    ], help="Budgets + MTD spend + unknown share + budget-gated tasks"),
+    _cmd("rm", [
+        _arg("scope", choices=("profile", "project", "tenant", "board"),
+             help="Budget scope of the row to remove"),
+        _arg("ref", nargs="?", default=None,
+             help="Scope reference (omitted for board)"),
+        _arg("--period", help="Budget month 'YYYY-MM' (default: current UTC month)"),
+        _arg("--monthly", action="store_true",
+             help="Remove the recurring row instead of a single-period row"),
+    ], help="Remove one budget row"),
+]
+
 # Top-level ``hermes kanban <action>`` records, in ``--help`` order.
 _SPECS = [
     _cmd("init", help="Create kanban.db if missing (idempotent)"),
@@ -421,6 +451,8 @@ _SPECS = [
         _TASK_ID,
         _arg("--note", help="Optional short note attached to the heartbeat event"),
     ], help="Emit a heartbeat event for a running task (worker liveness signal)"),
+    _cmd("budget", children=("budget_action", _BUDGET_SPECS),
+         help="Monthly cost budgets: set/show/rm (workers see, only humans set)"),
     _cmd("assignees", [_json_flag()],
          help="List known profiles + per-profile task counts (union of ~/.hermes/profiles/ and current assignees on the board)"),
     _cmd("context", [_TASK_ID],

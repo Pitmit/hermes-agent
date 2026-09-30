@@ -1,0 +1,59 @@
+{
+  "task": "t_5bb03efd",
+  "stage": "Kostenledger und harte Budgets (governance stage 1)",
+  "spec": "docs/kanban-governance-spec.md section 'Stufe 1'",
+  "base_sha": "c5a07664cf23714dfa3d4f677caed3b3ce9961e9",
+  "branch": "feat/kanban-governance-p0",
+  "commit_message": "feat: add kanban cost ledger and budget enforcement",
+  "changed_files": [
+    "hermes_cli/kanban_cost.py",
+    "hermes_cli/kanban_db.py",
+    "hermes_cli/kanban_db_connect.py",
+    "hermes_cli/kanban_db_dispatch.py",
+    "hermes_cli/kanban.py",
+    "hermes_cli/kanban_parser.py",
+    "hermes_cli/cli_shutdown.py",
+    "hermes_cli/config_defaults.py",
+    "hermes_state_usage.py",
+    "tools/kanban_tools.py",
+    "tools/kanban_tools_schemas.py",
+    "tests/hermes_cli/test_kanban_cost_budget.py",
+    "tests/hermes_state/test_session_spend_totals.py"
+  ],
+  "test_host": "vm-worker-gen (VM124, 10.10.10.124), fresh disposable harness",
+  "harness": {
+    "test_root": "/var/tmp/hermes-governance-cost.KgOznx (mktemp -d /var/tmp/hermes-governance-cost.XXXXXX)",
+    "home": "$TEST_ROOT/home, HERMES_HOME=$TEST_ROOT/hermes-home, caches under $TEST_ROOT/cache (nothing under ~ or NFS)",
+    "interpreter": "python3 -m pm.build_env --source <workspace> --out $TEST_ROOT/venv --group dev --group test (Python 3.14.7, BUILD_RC=0, 16s)",
+    "free_space_before": "27G available on /var/tmp (>= 5 GiB proven)",
+    "free_space_after": "27G available, 748 MiB harness removed",
+    "cleanup_proof": "path absent after rm -rf; ls /var/tmp/hermes-governance-cost.* -> NO_LEFTOVERS"
+  },
+  "commands": [
+    "scripts/run_tests.sh tests/hermes_cli/test_kanban_cost_budget.py tests/hermes_state/test_session_spend_totals.py -q",
+    "scripts/run_tests.sh tests/hermes_cli/test_kanban_cli.py tests/hermes_cli/test_kanban_db.py tests/hermes_cli/test_kanban_db_init.py tests/hermes_cli/test_kanban_core_functionality.py tests/hermes_cli/test_kanban_dispatch_claim_allowlist.py tests/hermes_cli/test_kanban_dispatch_lock.py tests/hermes_cli/test_kanban_dispatch_tick_hook.py tests/hermes_cli/test_kanban_cli_dispatch_passthrough.py tests/hermes_cli/test_kanban_default_assignee.py tests/hermes_cli/test_kanban_review_lifecycle.py tests/hermes_cli/test_kanban_review_lifecycle_complete.py tests/hermes_cli/test_kanban_review_surfaces.py tests/hermes_cli/test_kanban_complete_live_claim_guard.py tests/tools/test_kanban_tools.py tests/tools/test_kanban_unknown_arguments.py tests/tools/test_kanban_toolset_opt_in.py tests/hermes_cli/test_config.py -q"
+  ],
+  "results": {
+    "new_tests": {"files": 2, "passed": 22, "failed": 0, "rc": 0},
+    "existing_suites": {"files": 17, "passed": 395, "failed": 0, "skipped": 5, "rc": 0},
+    "git_diff_check": "clean"
+  },
+  "acceptance_criteria_proven": {
+    "migration_legacy_db": "test_legacy_db_backfills_unknown_rows_idempotently: dropped stage-1 tables + reset _INITIALIZED_PATHS, reconnect recreates + backfills exactly one unknown row per historical run, NULL amounts, idempotent on second cycle, list_tasks still works",
+    "cost_attributed_to_exactly_one_run": "test_worker_flush_attributes_cost_to_its_run_exactly_once: run_id PK, (run_id, task_id) fence rejects sibling, second flush cannot rewrite measured row (fill-only-from-unknown)",
+    "unknown_never_zero": "test_worker_flush_without_usage_records_unknown_never_zero + session test_unpriced_rows_are_unknown_with_null_amounts_never_zero: cost_status='unknown' <=> amounts NULL; table-wide invariant query returns 0",
+    "warn_threshold": "test_warn_threshold_lets_spawn_through_and_emits_one_deduped_event: spawn proceeds, exactly one budget_warn event, re-check does not refire",
+    "hard_stop": "test_hard_stop_holds_spawn_two_ticks_one_event_and_reactivates_on_raise: no spawn over two consecutive ticks, exactly one budget_stopped event, card stays ready, raising the limit spawns on the next tick with no new event",
+    "month_window_utc": "test_mtd_window_is_utc_month_only: previous-month ledger row not counted in current MTD; utc_period deterministic from run start",
+    "scope_priority": "test_scope_priority_most_general_violation_names_the_stop + test_tenant_and_project_budgets_apply_to_matching_tasks_only: board before profile; tenant before project; scopes filter to matching tasks only (real projects.db rows)",
+    "flag_off_byte_identical": "test_gate_off_leaves_dispatch_untouched: default off, spawn unchanged, zero budget events, budget_gate returns None before any query (probe connection raises on execute)",
+    "config_plumbing": "test_budgets_config_reads_through_the_real_loader: DEFAULT_CONFIG keys kanban.budgets.{enabled,unknown_policy} read through the real loader; unknown_policy 'flag' stamps unknown_share into budget events",
+    "cli_surface": "test_cli_budget_set_show_rm_roundtrip: hermes kanban budget set/show/rm incl. --monthly persist-key semantics, gated-tasks listing, fail-closed validation",
+    "worker_tool_read_only": "test_kanban_budget_show_tool_is_registered_and_read_only: kanban_budget_show registered on the kanban toolset, read-only handler",
+    "review_mirror": "test_review_mirror_skips_budget_stopped_rows: budget-stopped review rows do not withhold ready-lane capacity (_any_spawnable_review)"
+  },
+  "notes": [
+    "Fixes over the inherited run-152 draft, found by first real execution: _LEDGER_COLUMNS was a 1-tuple (SQL syntax error near '('), argparse help string contained a bare % (broke every run_slash surface on Python 3.14 help validation), session_spend_totals rewritten against the real storage semantics (session_model_usage amount columns are NOT NULL DEFAULT 0; cost_status is the honest discriminator: actual/included/estimated/unknown).",
+    "SSH backend mux socket is degraded in this session; every write was verified via git diff / grep read-back instead of the tools' post-write hash verification (documented in the run-152 recovery comment)."
+  ]
+}

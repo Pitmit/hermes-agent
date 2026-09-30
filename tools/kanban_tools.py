@@ -21,7 +21,8 @@ from tools.registry import no_cache_check_fn, registry, tool_error
 from hermes_cli.config import cfg_get, load_config
 from tools.kanban_tools_schemas import (
     KANBAN_ATTACH_SCHEMA,
-    KANBAN_ATTACH_URL_SCHEMA, KANBAN_ATTACHMENTS_SCHEMA, KANBAN_BLOCK_SCHEMA, KANBAN_COMMENT_SCHEMA,
+    KANBAN_ATTACH_URL_SCHEMA, KANBAN_ATTACHMENTS_SCHEMA, KANBAN_BLOCK_SCHEMA, KANBAN_BUDGET_SHOW_SCHEMA,
+    KANBAN_COMMENT_SCHEMA,
     KANBAN_COMPLETE_SCHEMA, KANBAN_CREATE_SCHEMA, KANBAN_HEARTBEAT_SCHEMA, KANBAN_LINK_SCHEMA,
     KANBAN_LIST_SCHEMA, KANBAN_REQUEST_CHANGES_SCHEMA, KANBAN_REQUEST_REVIEW_SCHEMA,
     KANBAN_SHOW_SCHEMA, KANBAN_UNBLOCK_SCHEMA)
@@ -1327,6 +1328,23 @@ def _handle_link(args: dict, **kw) -> str:
                    **({"gated_by": parent_id} if gated else {}), **extra)
 
 
+@_kanban_handler("kanban_budget_show")
+def _handle_budget_show(args: dict, **kw) -> str:
+    """Read-only monthly cost-budget status (governance stage 1).
+
+    Workers may see limits, never set them — no self-governance. Writes go
+    through the human-side CLI ``hermes kanban budget set``.
+    """
+    with _board(args.get("board")) as (kb, conn):
+        from hermes_cli import kanban_cost as _kcost
+
+        status = _kcost.budget_status(
+            conn, args.get("board") or kb.get_current_board() or kb.DEFAULT_BOARD,
+            args.get("period"),
+        )
+        return _ok(**status)
+
+
 # --- Registration (order preserved: it is the order tools appear in the schema) ---
 
 # kanban_list / kanban_unblock route the board and are hidden from task workers.
@@ -1345,6 +1363,7 @@ _TOOLS = (
     ("kanban_attachments", KANBAN_ATTACHMENTS_SCHEMA, _handle_attachments, "📎"),
     ("kanban_create", KANBAN_CREATE_SCHEMA, _handle_create, "➕"),
     ("kanban_unblock", KANBAN_UNBLOCK_SCHEMA, _handle_unblock, "▶"),
+    ("kanban_budget_show", KANBAN_BUDGET_SHOW_SCHEMA, _handle_budget_show, "💰"),
     ("kanban_link", KANBAN_LINK_SCHEMA, _handle_link, "🔗"))
 
 for _name, _sch, _handler, _emoji in _TOOLS:

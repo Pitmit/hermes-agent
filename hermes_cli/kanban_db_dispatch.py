@@ -145,6 +145,12 @@ class DispatchResult:
     """Task ids whose workers bailed on a provider rate-limit / quota wall
     (EX_TEMPFAIL sentinel exit) and were released to ``ready`` WITHOUT counting
     a failure — a long quota window must never trip the circuit breaker."""
+    budget_stopped: list[tuple[str, str]] = field(default_factory=list)
+    """``(task_id, scope:ref)`` rows NOT spawned this tick because a monthly
+    budget cap is exhausted (one ``budget_stopped`` event per (task, period)).
+    A dispatch gate like ``max_in_progress`` — the card stays ``ready`` and is
+    re-evaluated against the current limits every tick; it is NOT a block
+    (blocks are human semantics)."""
     skipped_locked: bool = False
     """True when another process held the board's dispatch lock: this tick did
     no DB writes; the lock holder is making progress on the same board."""
@@ -173,6 +179,8 @@ def describe_suppression(results: Iterable[Optional["DispatchResult"]]) -> str:
             counts[reason] = counts.get(reason, 0) + 1
         if res.rate_limited:
             counts["rate_limited"] = counts.get("rate_limited", 0) + len(res.rate_limited)
+        if res.budget_stopped:
+            counts["budget_stopped"] = counts.get("budget_stopped", 0) + len(res.budget_stopped)
         if res.skipped_locked:
             counts["skipped_locked"] = counts.get("skipped_locked", 0) + 1
         if res.memory_pressure:
@@ -2149,6 +2157,23 @@ def _dispatch_lane_task(
                 _kb._append_event(conn, task_id, "respawn_guarded", {"reason": guard_reason})
         return False
 
+    # Cost-governance budget gate (stage 1): pre-claim, fail-open, and only
+    # armed when ``kanban.budgets.enabled`` — with the flag off, budget_gate
+    # returns ``None`` before its first query and this tick stays byte-identical.
+    # A hard stop holds the spawn (card stays ``ready`` — dispatch gate, not a
+    # block); a warn crossing emits one deduplicated event and lets it proceed.
+    try:
+        from hermes_cli import kanban_cost as _kcost
+        budget_stop = _kcost.budget_gate(
+            conn, task_id, assignee=assignee, board=board, lane=lane, dry_run=dry_run,
+        )
+    except Exception:
+        _kb._log.debug("kanban budget gate failed for %s (fail-open)", task_id, exc_info=True)
+        budget_stop = None
+    if budget_stop is not None and budget_stop.get("kind") == "budget_stopped":
+        result.budget_stopped.append((task_id, f"{budget_stop.get('scope')}:{budget_stop.get('ref')}"))
+        return False
+
     def _count_spawn(name: str) -> None:
         # Later rows in this tick respect the per-profile cap; subsequent
         # ticks re-query from the DB.
@@ -2382,8 +2407,25 @@ def _any_spawnable_review(
             continue
         if per_profile_cap is not None and running.get(assignee, 0) >= per_profile_cap:
             continue
-        if check_respawn_guard(conn, row["id"], lane="review") is None:
-            return True
+        if check_respawn_guard(conn, row["id"], lane="review") is not None:
+            continue
+        # Budget mirror (stage 1): a review row the budget gate would hold must
+        # not consume the ready-lane reservation. Pure check (no events) — the
+        # review lane's own _dispatch_lane_task call emits the budget_stopped
+        # event exactly once per (task, period) when it actually gets there.
+        try:
+            from hermes_cli import kanban_cost as _kcost
+            if _kcost.budgets_enabled():
+                decision = _kcost.check_budget(
+                    conn, row["id"], assignee=assignee, board=board,
+                )
+                if decision["stop"] is not None:
+                    continue
+        except Exception:
+            _kb._log.debug(
+                "budget mirror check failed for %s (fail-open)", row["id"], exc_info=True,
+            )
+        return True
     return False
 
 

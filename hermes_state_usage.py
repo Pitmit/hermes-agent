@@ -417,6 +417,71 @@ class SessionUsageMixin:
         )
         return {row["task"]: {k: row[k] for k in row.keys() if k != "task"} for row in rows}
 
+    def session_spend_totals(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Aggregate ONE session's usage for the kanban run-cost ledger.
+
+        ``None`` when the session has no ``session_model_usage`` rows — nothing
+        was measured, and the ledger records ``cost_status='unknown'`` with
+        NULL amounts, never 0.
+
+        The usage table CANNOT store NULL amounts (``NOT NULL DEFAULT 0``
+        columns; the writer persists ``float(x or 0.0)``), so the honest price
+        discriminator is each row's ``cost_status``: ``actual`` rows carry a
+        known billed price, ``included`` rows a known $0 (subscription-included),
+        ``estimated`` rows an estimate; NULL or ``unknown`` rows were never
+        priced. Session status is ``'actual'`` only when every priced row is
+        actual/included, ``'estimated'`` when at least one row is priced (a mix
+        downgrades to the weaker claim), ``'unknown'`` when none is priced.
+        """
+        if not session_id:
+            return None
+        row = self._read_one(
+            """SELECT COUNT(*),
+                      COALESCE(SUM(api_call_count), 0),
+                      COALESCE(SUM(input_tokens), 0),
+                      COALESCE(SUM(output_tokens), 0),
+                      COALESCE(SUM(cache_read_tokens), 0),
+                      COALESCE(SUM(cache_write_tokens), 0),
+                      COALESCE(SUM(reasoning_tokens), 0),
+                      COALESCE(SUM(CASE
+                          WHEN cost_status = 'actual'
+                              THEN COALESCE(actual_cost_usd, estimated_cost_usd, 0)
+                          WHEN cost_status = 'estimated'
+                              THEN COALESCE(estimated_cost_usd, actual_cost_usd, 0)
+                          WHEN cost_status = 'included' THEN 0
+                          ELSE 0 END), 0),
+                      COALESCE(SUM(CASE WHEN cost_status IN ('actual', 'included')
+                                        THEN 1 ELSE 0 END), 0),
+                      COALESCE(SUM(CASE WHEN cost_status = 'estimated'
+                                        THEN 1 ELSE 0 END), 0),
+                      COALESCE(SUM(CASE WHEN cost_status IN ('actual', 'estimated', 'included')
+                                        THEN 1 ELSE 0 END), 0)
+                 FROM session_model_usage WHERE session_id = ?""",
+            (session_id,),
+        )
+        if row is None or not int(row[0] or 0):
+            return None
+        actual_rows, estimated_only, priced = (
+            int(row[8] or 0), int(row[9] or 0), int(row[10] or 0),
+        )
+        cost = float(row[7] or 0.0)
+        status = (
+            "unknown" if not priced
+            else "actual" if actual_rows and not estimated_only
+            else "estimated"
+        )
+        return {
+            "api_call_count": int(row[1] or 0),
+            "input_tokens": int(row[2] or 0),
+            "output_tokens": int(row[3] or 0),
+            "cache_read_tokens": int(row[4] or 0),
+            "cache_write_tokens": int(row[5] or 0),
+            "reasoning_tokens": int(row[6] or 0),
+            "cost_status": status,
+            "estimated_cost_usd": cost if status == "estimated" else None,
+            "actual_cost_usd": cost if status == "actual" else None,
+        }
+
     def usage_totals(self, *, min_message_count: int = 1, include_archived: bool = False) -> Dict[str, float]:
         """Tokens and spend across the whole store (one scan), so the sidebar total does not
         shrink with paging. Spend prefers the billed figure over the estimate."""

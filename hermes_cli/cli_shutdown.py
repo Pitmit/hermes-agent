@@ -267,6 +267,16 @@ def _flush_one_shot_session_store(cli) -> None:
         db.flush_token_counts()
     except Exception:
         logger.debug("one-shot token-count drain failed", exc_info=True)
+    # Kanban cost ledger (governance stage 1): the worker's own run cost row,
+    # exactly once per exit path (completion, block, SIGTERM epilogue — they all
+    # funnel through here). Reads the usage AFTER the token-delta drain, before
+    # end_session. worker_run_cost_flush is fail-open by contract: a cost report
+    # must never be the cause of a failed run.
+    try:
+        from hermes_cli.kanban_cost import worker_run_cost_flush
+        worker_run_cost_flush(db, session_id)
+    except Exception:
+        logger.debug("kanban run-cost flush failed (fail-open)", exc_info=True)
     try:
         db.end_session(session_id, "cli_close")
     except Exception:

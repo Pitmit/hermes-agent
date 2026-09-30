@@ -362,6 +362,24 @@ KANBAN_ATTACHMENTS_SCHEMA = _schema(
     [],
 )
 
+KANBAN_BUDGET_SHOW_SCHEMA = _schema(
+    "kanban_budget_show",
+    (
+        "Read-only monthly cost-budget status of the board: every budget "
+        "with its limit and warn ratio, month-to-date known spend, and the "
+        "unknown-run share (runs with no measured cost — honest, not 0). "
+        "Workers may see limits, never set them: budgets are managed by the "
+        "human via `hermes kanban budget set`."
+    ),
+    {
+        "period": _prop(
+            "string",
+            "Budget month 'YYYY-MM' (UTC). Defaults to the current month.",
+        ),
+    },
+    [],
+)
+
 KANBAN_CREATE_SCHEMA = _schema(
     "kanban_create",
     (
