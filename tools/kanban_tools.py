@@ -20,6 +20,7 @@ from hermes_cli.goals import judge_goal
 from tools.registry import no_cache_check_fn, registry, tool_error
 from hermes_cli.config import cfg_get, load_config
 from tools.kanban_tools_schemas import (
+    KANBAN_APPROVAL_REQUEST_SCHEMA,
     KANBAN_ATTACH_SCHEMA,
     KANBAN_ATTACH_URL_SCHEMA, KANBAN_ATTACHMENTS_SCHEMA, KANBAN_BLOCK_SCHEMA, KANBAN_BUDGET_SHOW_SCHEMA,
     KANBAN_COMMENT_SCHEMA,
@@ -101,6 +102,24 @@ def _check_kanban_mode() -> bool:
 def _check_kanban_orchestrator_mode() -> bool:
     """Board-routing tools (kanban_list, kanban_unblock): hidden from task workers."""
     return _visible(to_env_worker=False)
+
+
+@no_cache_check_fn
+def _check_kanban_approvals_mode() -> bool:
+    """Approval-request tool: gated on ``kanban.approvals.enabled`` (default off).
+
+    Requesting is worker-legal; DECIDING never is (there is no decide tool, and
+    the kernel refuses worker contexts). The flag arms the worker surface; the
+    human CLI surface works either way.
+    """
+    if not _visible(to_env_worker=True):
+        return False
+    try:
+        from hermes_cli.kanban_approvals import approvals_enabled
+
+        return approvals_enabled()
+    except Exception:
+        return False
 
 
 # --- Shared helpers: validation failures raise _Reject; _kanban_handler renders it ---
@@ -646,7 +665,7 @@ def _handle_show(args: dict, **kw) -> str:
     tid = _require_task_id(args)
     with _board(args.get("board")) as (kb, conn):
         task = _existing_task(kb, conn, tid)
-        return json.dumps({
+        payload = {
             "task": _fields(task, _TASK_FIELDS),
             "parents": kb.parent_ids(conn, tid),
             # Non-terminal parents; on a running card this means the dependency
@@ -659,7 +678,19 @@ def _handle_show(args: dict, **kw) -> str:
             "events": [_fields(e, _EVENT_FIELDS) for e in kb.list_events(conn, tid)[-50:]],
             "runs": [_fields(r, _RUN_FIELDS) for r in kb.list_runs(conn, tid)],
             # Same string build_worker_context hands the dispatcher at spawn time.
-            "worker_context": kb.build_worker_context(conn, tid)})
+            "worker_context": kb.build_worker_context(conn, tid)}
+        # Approval hint (governance stage 2): a task held by an approval gets
+        # its live approval state so the worker never re-asks for a decided or
+        # invalidated request.
+        try:
+            from hermes_cli import kanban_approvals as _ka
+
+            hint = _ka.approval_hint_for_task(conn, tid)
+            if hint is not None:
+                payload["approval"] = hint
+        except Exception:
+            logger.debug("approval hint for %s failed (read-only, fail-open)", tid, exc_info=True)
+        return json.dumps(payload)
 
 
 @_kanban_handler("kanban_list")
@@ -1345,10 +1376,42 @@ def _handle_budget_show(args: dict, **kw) -> str:
         return _ok(**status)
 
 
+@_kanban_handler("kanban_approval_request")
+def _handle_approval_request(args: dict, **kw) -> str:
+    """File a human-approval request (governance stage 2) — request ONLY.
+
+    The worker asks; a human decides via the CLI/dashboard/gateway. There is
+    deliberately no approve tool, and the kernel's decide path refuses worker
+    contexts and self-approval. Board isolation: the request lands on the
+    board this call resolves to (no board override parameter on purpose).
+    """
+    _reject_delegated_child_mutation("kanban_approval_request")
+    with _board(None) as (kb, conn):
+        from hermes_cli import kanban_approvals as _ka
+
+        result = _ka.request_approval(
+            conn,
+            board=kb.get_current_board() or kb.DEFAULT_BOARD,
+            type=args["type"],
+            subject_kind=args["subject_kind"],
+            subject_ref=args["subject_ref"],
+            requester=_persisted_identity(),
+            note=args.get("note"),
+            period=args.get("period"),
+            via="tool",
+        )
+        return _ok(**result)
+
+
 # --- Registration (order preserved: it is the order tools appear in the schema) ---
 
-# kanban_list / kanban_unblock route the board and are hidden from task workers.
-_ORCHESTRATOR_TOOLS = frozenset({"kanban_list", "kanban_unblock"})
+# kanban_list / kanban_unblock route the board and are hidden from task workers;
+# kanban_approval_request is additionally flag-gated (kanban.approvals.enabled).
+_TOOL_GATES = {
+    "kanban_list": _check_kanban_orchestrator_mode,
+    "kanban_unblock": _check_kanban_orchestrator_mode,
+    "kanban_approval_request": _check_kanban_approvals_mode,
+}
 _TOOLS = (
     ("kanban_show", KANBAN_SHOW_SCHEMA, _handle_show, "📋"),
     ("kanban_list", KANBAN_LIST_SCHEMA, _handle_list, "📋"),
@@ -1364,9 +1427,9 @@ _TOOLS = (
     ("kanban_create", KANBAN_CREATE_SCHEMA, _handle_create, "➕"),
     ("kanban_unblock", KANBAN_UNBLOCK_SCHEMA, _handle_unblock, "▶"),
     ("kanban_budget_show", KANBAN_BUDGET_SHOW_SCHEMA, _handle_budget_show, "💰"),
+    ("kanban_approval_request", KANBAN_APPROVAL_REQUEST_SCHEMA, _handle_approval_request, "✋"),
     ("kanban_link", KANBAN_LINK_SCHEMA, _handle_link, "🔗"))
 
 for _name, _sch, _handler, _emoji in _TOOLS:
-    _gate = _check_kanban_orchestrator_mode if _name in _ORCHESTRATOR_TOOLS else _check_kanban_mode
     registry.register(name=_name, toolset="kanban", schema=_sch, handler=_handler, emoji=_emoji,
-                      check_fn=_gate)
+                      check_fn=_TOOL_GATES.get(_name, _check_kanban_mode))

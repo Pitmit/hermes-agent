@@ -1328,6 +1328,19 @@ def _cmd_budget(args: argparse.Namespace) -> int:
     return dispatch_budget(args)
 
 
+def _cmd_approval(args: argparse.Namespace) -> int:
+    """``hermes kanban approval request|list|show|approve|reject|revise`` — the
+    human approval surface (governance stage 2).
+
+    Delegates to :func:`hermes_cli.kanban_approvals.dispatch_approval`. Decision
+    verbs fail closed in dispatched-worker contexts; the worker toolset has
+    ``kanban_approval_request`` only.
+    """
+    from hermes_cli.kanban_approvals import dispatch_approval
+
+    return dispatch_approval(args)
+
+
 _HANDLERS = {
     "init": _cmd_init, "create": _cmd_create, "swarm": _cmd_swarm,
     "list": _cmd_list, "ls": _cmd_list, "show": _cmd_show,
@@ -1347,7 +1360,7 @@ _HANDLERS = {
     "assignees": _cmd_assignees, "notify-subscribe": _cmd_notify_subscribe,
     "notify-list": _cmd_notify_list, "notify-unsubscribe": _cmd_notify_unsubscribe,
     "context": _cmd_context, "specify": _cmd_specify, "decompose": _cmd_decompose,
-    "gc": _cmd_gc, "budget": _cmd_budget,
+    "gc": _cmd_gc, "budget": _cmd_budget, "approval": _cmd_approval,
 }
 
 

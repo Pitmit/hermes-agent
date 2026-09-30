@@ -1128,7 +1128,50 @@ CREATE TABLE IF NOT EXISTS kanban_budgets (
     created_by TEXT NOT NULL,
     created_at INTEGER NOT NULL,
     PRIMARY KEY (board, scope, ref, period)
-);"""
+);
+
+-- Generic approvals (governance stage 2): a human gate over a STABLE subject.
+-- subject_fingerprint is sha256 over the canonical subject, ALWAYS computed
+-- server-side (kanban_approvals.resolve_subject), never caller-supplied. Any
+-- drift between request and decision invalidates the open request (fail-closed:
+-- in doubt invalidated, never "still counts"). status: 'pending' |
+-- 'approved' | 'rejected' | 'revision_requested' | 'invalidated'; open rows
+-- ('pending'/'revision_requested') are the only decidable/dedupable ones.
+-- Workers may REQUEST (kanban_approval_request tool) but never decide: there
+-- is no decide tool and the kernel refuses worker contexts + self-approval.
+CREATE TABLE IF NOT EXISTS approvals (
+    id                  TEXT PRIMARY KEY,          -- 'ap_<hex>'
+    board               TEXT NOT NULL,
+    tenant              TEXT,
+    type                TEXT NOT NULL,             -- 'strategy'|'hire'|'budget'|'action'|'release'
+    subject_kind        TEXT NOT NULL,             -- 'task'|'budget'|'document'|'release_plan'
+    subject_id          TEXT,                      -- task_id / 'scope:ref' / doc path / 'release:<sha>'
+    subject_fingerprint TEXT NOT NULL,
+    requester           TEXT NOT NULL,             -- profile that asked
+    request_note        TEXT,
+    status              TEXT NOT NULL DEFAULT 'pending',
+    approver            TEXT,                      -- profile that decided
+    decided_at          INTEGER,
+    decided_via         TEXT,                      -- 'cli'|'dashboard'|'gateway'
+    decision_note       TEXT,
+    invalidation_reason TEXT,                      -- 'subject_drift'|'subject_unresolvable'
+    period              TEXT,                      -- for type='budget': 'YYYY-MM'
+    requested_at        INTEGER NOT NULL,
+    updated_at          INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(board, status);
+CREATE INDEX IF NOT EXISTS idx_approvals_subject ON approvals(board, subject_kind, subject_id);
+
+-- Approval audit trail: exactly one row per transition (requested / decided /
+-- invalidated); dedup of an identical open request appends NOTHING.
+CREATE TABLE IF NOT EXISTS approval_events (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    approval_id  TEXT NOT NULL,
+    kind         TEXT NOT NULL,    -- 'approval_requested'|'approval_decided'|'approval_invalidated'
+    payload      TEXT,
+    created_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_approval_events_approval ON approval_events(approval_id, id);"""
 
 
 # --- ID generation ---
@@ -3706,45 +3749,54 @@ def _landing_status_after_parents(conn: sqlite3.Connection, task_id: str) -> str
 def unblock_task(conn: sqlite3.Connection, task_id: str) -> bool:
     """``blocked``/``scheduled`` -> its resumable phase (parent re-gated; ``review``
     when that is where it left off), closing any leaked run first."""
-    now = int(time.time())
     with write_txn(conn):
-        resume_status = (
-            _resume_status_from_events(conn, task_id)
-            if _task_status(conn, task_id) == "blocked"
-            else "ready"
-        )
-        _reclaim_dangling_run(
-            conn, task_id, statuses=("blocked", "scheduled"), now=now,
-            note="invariant recovery on unblock",
-        )
-        # Re-gate on parent completion before restoring the source phase.
-        landing_status = _landing_status_after_parents(conn, task_id)
-        new_status = (
-            "review"
-            if landing_status == "ready" and resume_status == "review"
-            else landing_status
-        )
-        # ``block_kind``/``block_recurrences`` deliberately survive the unblock:
-        # resetting them is the amnesia that let cron-unblock <-> re-block loop
-        # unbounded; only complete_task clears them. ``consecutive_failures``
-        # (the dispatcher's spawn/crash counter) IS reset — a deliberate unblock
-        # is a fresh start for the retry budget.
-        cur = conn.execute(
-            "UPDATE tasks SET status = ?, current_run_id = NULL, "
-            "consecutive_failures = 0, last_failure_error = NULL "
-            "WHERE id = ? AND status IN ('blocked', 'scheduled')", (new_status, task_id),
-        )
-        if cur.rowcount != 1:
-            return False
-        _append_event(
-            conn, task_id, "unblocked",
-            (
-                {"status": new_status, "resume_status": resume_status}
-                if new_status != "ready" or resume_status != "ready"
-                else None
-            ),
-        )
-        return True
+        return _unblock_task_in_txn(conn, task_id)
+
+
+def _unblock_task_in_txn(conn: sqlite3.Connection, task_id: str) -> bool:
+    """:func:`unblock_task`'s body WITHOUT its own transaction — so a caller that
+    must release several tasks atomically (the approval decision releasing the
+    tasks bound by ``approval:<id>``) runs the exact same unblock semantics
+    (parent re-gating, resume status, sticky-block exit) inside ITS transaction
+    instead of duplicating this logic. Opens no transaction; callers hold one."""
+    now = int(time.time())
+    resume_status = (
+        _resume_status_from_events(conn, task_id)
+        if _task_status(conn, task_id) == "blocked"
+        else "ready"
+    )
+    _reclaim_dangling_run(
+        conn, task_id, statuses=("blocked", "scheduled"), now=now,
+        note="invariant recovery on unblock",
+    )
+    # Re-gate on parent completion before restoring the source phase.
+    landing_status = _landing_status_after_parents(conn, task_id)
+    new_status = (
+        "review"
+        if landing_status == "ready" and resume_status == "review"
+        else landing_status
+    )
+    # ``block_kind``/``block_recurrences`` deliberately survive the unblock:
+    # resetting them is the amnesia that let cron-unblock <-> re-block loop
+    # unbounded; only complete_task clears them. ``consecutive_failures``
+    # (the dispatcher's spawn/crash counter) IS reset — a deliberate unblock
+    # is a fresh start for the retry budget.
+    cur = conn.execute(
+        "UPDATE tasks SET status = ?, current_run_id = NULL, "
+        "consecutive_failures = 0, last_failure_error = NULL "
+        "WHERE id = ? AND status IN ('blocked', 'scheduled')", (new_status, task_id),
+    )
+    if cur.rowcount != 1:
+        return False
+    _append_event(
+        conn, task_id, "unblocked",
+        (
+            {"status": new_status, "resume_status": resume_status}
+            if new_status != "ready" or resume_status != "ready"
+            else None
+        ),
+    )
+    return True
 
 
 def reopen_review_task(conn: sqlite3.Connection, task_id: str) -> bool:

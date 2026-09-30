@@ -1891,6 +1891,13 @@ DEFAULT_CONFIG = {
             # events so a high unknown share is visible in the event log.
             "unknown_policy": "allow",
         },
+        # Generic approvals (governance stage 2): human gates over stable
+        # subjects. Off (default) keeps the worker-side kanban_approval_request
+        # tool hidden; the CLI surface and the approvals tables are additive and
+        # the dispatcher never touches them.
+        "approvals": {
+            "enabled": False,
+        },
         # Profile for the root/orchestration task after Triage decomposition; "" = default profile.
         # Does not control the decomposer LLM path (see auxiliary.kanban_decomposer).
         "orchestrator_profile": "",

@@ -1,0 +1,60 @@
+{
+  "task": "t_192c5d2b",
+  "stage": "Generische Approvals (governance stage 2)",
+  "spec": "docs/kanban-governance-spec.md section 'Stufe 2'",
+  "base_sha": "05118e86811659ee6747bfd05c33dbfa98e4ff6b",
+  "branch": "feat/kanban-governance-p0",
+  "commit_message": "feat: add kanban approval engine",
+  "changed_files": [
+    "hermes_cli/kanban_approvals.py",
+    "hermes_cli/kanban_db.py",
+    "hermes_cli/kanban.py",
+    "hermes_cli/kanban_parser.py",
+    "hermes_cli/config_defaults.py",
+    "tools/kanban_tools.py",
+    "tools/kanban_tools_schemas.py",
+    "tests/hermes_cli/test_kanban_approvals.py",
+    "artifacts/run-approval-tests.sh",
+    "artifacts/approval-engine-test-receipt.json"
+  ],
+  "test_host": "vm-worker-gen (VM124, 10.10.10.124), fresh disposable harness",
+  "harness": {
+    "test_root": "/var/tmp/hermes-governance-appr.CZxV9n (mktemp -d /var/tmp/hermes-governance-appr.XXXXXX)",
+    "home": "$TEST_ROOT/home, HERMES_HOME=$TEST_ROOT/hermes-home, caches under $TEST_ROOT/cache (nothing under ~ or NFS)",
+    "interpreter": "python3 -m pm.build_env --source <workspace> --out $TEST_ROOT/venv --group dev --group test (BUILD_RC=0)",
+    "free_space_before": "117468484 KiB (~112 GiB) available on /var/tmp (>= 5 GiB proven before start)",
+    "free_space_after": "116702964 KiB available at suite end; harness removed by EXIT-trap",
+    "cleanup_proof": "path absent after rm -rf; ls /var/tmp/hermes-governance-appr.* -> NO_LEFTOVERS (rc=2)"
+  },
+  "commands": [
+    "scripts/run_tests.sh tests/hermes_cli/test_kanban_approvals.py -q --tb=short",
+    "scripts/run_tests.sh <25 existing kanban/cli/tools/config files> -q",
+    "git diff --check"
+  ],
+  "results": {
+    "new_tests": {"files": 1, "passed": 35, "failed": 0, "rc": 0},
+    "existing_suites": {"files": 25, "passed": 444, "failed": 0, "skipped": 5, "rc": 0},
+    "git_diff_check": "clean"
+  },
+  "acceptance_criteria_proven": {
+    "status_matrix_complete": "test_status_matrix_from_pending (approve/reject/revise), test_status_matrix_from_revision_requested (still-open revisits incl. second revise), test_status_matrix_terminal_states_refuse_every_decision (approved/rejected refuse all three verbs, no event, no state change)",
+    "self_approval_fail_closed": "test_self_approval_is_fail_closed (kernel PermissionError, status stays pending, no decided event; a different profile may decide) + CLI rc=2 in test_cli_approval_roundtrip",
+    "drift_invalidates": "test_drift_invalidates_and_second_decide_is_refused (decision on changed subject -> rc!=0, status invalidated, exactly ONE approval_invalidated event, second attempt adds none) + test_reads_invalidate_drifted_open_requests (list/show invalidate drifted/unresolvable subjects) + test_budget_approval_needs_stable_budget_row (limit change drifts the budget subject)",
+    "identical_request_deduplicated": "test_identical_request_is_deduplicated (same id, one row, one requested event; different note does not break dedup) + test_dedup_scopes_to_open_requests_and_requester (other requester = own row; decided request no longer dedupes)",
+    "lost_answer_read_back": "test_lost_response_is_read_back_able (re-request returns the same id; show/list return live state; exactly one row) + kanban_show approval hint (test_show_hint_for_bound_task)",
+    "old_db_migration": "test_legacy_db_creates_approvals_tables_and_serves (approvals/approval_events dropped, reconnect recreates additively, list + request + idempotent second init cycle all green)",
+    "worker_fencing": "test_worker_context_cannot_decide (HERMES_KANBAN_TASK env -> PermissionError, no state change) + test_no_decide_tool_exists_in_the_registry (no approve/reject/revise/decide/list/show tool registered; get_schema returns None) + test_request_tool_is_flag_gated (kanban.approvals.enabled default False hides the worker tool; flag on exposes it; DEFAULT_CONFIG registered)",
+    "board_isolation": "test_board_isolation (second board DB: approval invisible, not found, not decidable) + test_task_subject_stamps_tenant (tenant stamped from task subject)",
+    "approve_releases_bound_tasks_only": "test_approve_releases_exactly_bound_tasks (exact-reason Vorher/Nachher-Statusdiff: only the approval:<id>-bound task released via shared unblock semantics + unblocked event; other-approval/plain-blocked/ready untouched; reject releases nothing) + test_rebind_after_unblock_only_latest_reason_counts (only the LATEST blocked event's exact reason counts)",
+    "no_approval_without_stable_subject": "test_no_approval_without_stable_subject (missing task/bogus kind/bogus type refused, zero rows) + budget row + period enforced + document readability enforced (test_document_fingerprint_tracks_content_not_path) + release-plan JSON validated (test_release_plan_fingerprint_ignores_key_order)",
+    "fingerprints_server_side_deterministic": "test_task_fingerprint_is_deterministic_and_drift_sensitive + document content-addressing + release-plan canonicalization (key order irrelevant); fingerprints always computed by kanban_approvals.resolve_subject, never accepted from callers",
+    "events_audit_complete": "every transition appends exactly one approval_requested/approval_decided/approval_invalidated event; test_pure_reads_of_healthy_approvals_append_no_events (read path adds nothing when nothing drifted)",
+    "review_loop_untouched": "existing suites green incl. review_lifecycle/review_lifecycle_complete/review_surfaces/complete_live_claim_guard/pr_acceptance/reclaim_claim_lock/block_kinds/blocked_sticky (unblock refactor proven behaviour-identical) — 444 passed, 0 failed"
+  },
+  "notes": [
+    "First real execution found one kernel bug the harness exposed: raising the drift refusal INSIDE the decision write_txn rolled the invalidation back with it (status reverted to pending while the error claimed invalidated). Fixed by collecting refusals and raising AFTER commit, so the invalidation + its exactly-one event persist while the decision is refused; re-run all green.",
+    "Test-design lessons from the same first run: dedup tests must pin ONE subject (a fresh task per request is a different subject by task_id-in-fingerprint design); same-kind needs_input re-blocks legitimately route to triage at BLOCK_RECURRENCE_LIMIT, so re-bind scenarios use untyped blocks; the kanban_show approval hint is a projection of the block and disappears when approve releases the task.",
+    "unblock_task refactored into unblock_task + _unblock_task_in_txn (body unchanged, no own txn) so approve releases bound tasks inside the decision transaction with IDENTICAL semantics (parent re-gating, resume status, sticky-block exit) — proven by the untouched blocked_sticky/block_kinds/review suites.",
+    "Dispatcher untouched: no tick-path change, flags-off neutrality trivially preserved (approvals are queried only by CLI/tool surfaces, never by the tick)."
+  ]
+}

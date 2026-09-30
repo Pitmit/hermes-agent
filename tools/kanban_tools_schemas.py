@@ -380,6 +380,50 @@ KANBAN_BUDGET_SHOW_SCHEMA = _schema(
     [],
 )
 
+KANBAN_APPROVAL_REQUEST_SCHEMA = _schema(
+    "kanban_approval_request",
+    (
+        "Request a human approval for a decision outside your authority "
+        "(spending money, hiring, strategy, releasing/publishing, or any "
+        "action with lasting effect). This only FILES the request — a human "
+        "decides it later via `hermes kanban approval approve|reject|revise`; "
+        "you can never approve it yourself. Identical repeated requests are "
+        "deduplicated: re-requesting after a lost response returns the same "
+        "approval id. If the request should hold your task, additionally "
+        "kanban_block with kind='needs_input' and reason='approval:<id>'."
+    ),
+    {
+        "type": _prop(
+            "string",
+            "Approval type: 'strategy' | 'hire' | 'budget' | 'action' | 'release'.",
+        ),
+        "subject_kind": _prop(
+            "string",
+            "What is being approved: 'task' (a task id), 'budget' (a "
+            "'scope:ref' budget key, e.g. 'profile:alice'), 'document' (a "
+            "readable file path whose content is fingerprinted) or "
+            "'release_plan' (a JSON object of the plan).",
+        ),
+        "subject_ref": _prop(
+            "string",
+            "The subject: task id, budget 'scope:ref', document file path, "
+            "or release-plan JSON object. The subject must exist and be "
+            "stable — the kernel fingerprints it server-side and invalidates "
+            "the request on any drift.",
+        ),
+        "period": _prop(
+            "string",
+            "Budget month 'YYYY-MM' (UTC) — required for type 'budget'.",
+        ),
+        "note": _prop(
+            "string",
+            "One or two sentences: what exactly needs the human's decision "
+            "and what you already tried. Don't paste the whole conversation.",
+        ),
+    },
+    ["type", "subject_kind", "subject_ref"],
+)
+
 KANBAN_CREATE_SCHEMA = _schema(
     "kanban_create",
     (

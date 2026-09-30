@@ -176,6 +176,50 @@ _BUDGET_SPECS = [
     ], help="Remove one budget row"),
 ]
 
+# ``hermes kanban approval <action>`` records (governance stage 2: generic
+# human approvals). The decision verbs are the HUMAN surface — workers ask via
+# the kanban_approval_request tool and can never approve/reject/revise.
+_APPROVAL_SPECS = [
+    _cmd("request", [
+        _arg("type", choices=("strategy", "hire", "budget", "action", "release"),
+             help="Approval type: strategy | hire | budget | action | release"),
+        _arg("--subject-kind", choices=("task", "budget", "document", "release_plan"),
+             required=True,
+             help="What is being approved: a task, a budget row, a document (path) or a release plan (JSON)"),
+        _arg("--subject-ref", required=True,
+             help="Task id | budget 'scope:ref' | document file path | release-plan JSON"),
+        _arg("--note", help="Why this needs a human decision (shown to the approver)"),
+        _arg("--period", help="Budget month 'YYYY-MM' (required for type budget)"),
+        _json_flag(help="Emit the full approval row as JSON"),
+    ], help="Request a human approval (idempotent; identical open request returns the same id)"),
+    _cmd("list", [
+        _arg("--status", choices=("pending", "approved", "rejected", "revision_requested", "invalidated"),
+             help="Filter by status (default: all)"),
+        _arg("--type", choices=("strategy", "hire", "budget", "action", "release"),
+             help="Filter by approval type"),
+        _json_flag(help="Emit one JSON array"),
+    ], help="List this board's approvals"),
+    _cmd("show", [
+        _arg("approval_id", help="Approval id (ap_...)"),
+        _json_flag(help="Emit approval row + events as JSON"),
+    ], help="Show one approval with its full audit trail"),
+    _cmd("approve", [
+        _arg("approval_id", help="Approval id (ap_...)"),
+        _arg("--note", help="Optional decision note (audit trail)"),
+        _json_flag(help="Emit the decided approval row as JSON"),
+    ], help="Approve (releases exactly the tasks bound by 'approval:<id>')"),
+    _cmd("reject", [
+        _arg("approval_id", help="Approval id (ap_...)"),
+        _arg("--note", help="Rejection reason (audit trail)"),
+        _json_flag(help="Emit the decided approval row as JSON"),
+    ], help="Reject the request"),
+    _cmd("revise", [
+        _arg("approval_id", help="Approval id (ap_...)"),
+        _arg("--note", help="What the requester should revise (audit trail)"),
+        _json_flag(help="Emit the decided approval row as JSON"),
+    ], help="Ask for revision (keeps the request open)"),
+]
+
 # Top-level ``hermes kanban <action>`` records, in ``--help`` order.
 _SPECS = [
     _cmd("init", help="Create kanban.db if missing (idempotent)"),
@@ -453,6 +497,8 @@ _SPECS = [
     ], help="Emit a heartbeat event for a running task (worker liveness signal)"),
     _cmd("budget", children=("budget_action", _BUDGET_SPECS),
          help="Monthly cost budgets: set/show/rm (workers see, only humans set)"),
+    _cmd("approval", children=("approval_action", _APPROVAL_SPECS),
+         help="Generic human approvals: request/list/show/approve/reject/revise (workers ask, only humans decide)"),
     _cmd("assignees", [_json_flag()],
          help="List known profiles + per-profile task counts (union of ~/.hermes/profiles/ and current assignees on the board)"),
     _cmd("context", [_TASK_ID],
