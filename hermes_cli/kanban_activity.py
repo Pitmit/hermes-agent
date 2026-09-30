@@ -14,6 +14,17 @@ ACTIVITY_MAX_GRAPH_SCAN = ACTIVITY_MAX_TASKS * 4
 ACTIVITY_MAX_PARENTS_PER_TASK = 16
 ACTIVITY_BLOCK_REASON_MAX_CHARS = 240
 ACTIVITY_RECENT_COMPLETION_SECONDS = 300
+ACTIVITY_PHASE_MAX_CHARS = 80
+ACTIVITY_UNIT_MAX_CHARS = 40
+
+# Structured-progress columns of task_runs (governance P1-B1). Kept separate so
+# the run SELECT can fall back to the pre-P1-B1 column set when a legacy board
+# DB (read-only poller, never migrated) does not carry them yet.
+_RUN_PROGRESS_COLUMNS = (
+    "r.progress_phase", "r.progress_unit", "r.progress_completed",
+    "r.progress_total", "r.progress_rate", "r.progress_eta_seconds",
+    "r.progress_error_count", "r.progress_pct", "r.progress_updated_at",
+)
 
 
 def _board():
@@ -63,6 +74,42 @@ def _activity_block_reason(payload: Any) -> Optional[str]:
         # text in a composer-adjacent surface.
         return "Details unavailable"
     return _bounded_activity_text(reason, ACTIVITY_BLOCK_REASON_MAX_CHARS)
+
+
+def _activity_progress_text(value: Any, limit: int) -> Optional[str]:
+    """Bounded, secret-redacted presentation string for a progress field.
+
+    Same fail-closed posture as ``_activity_block_reason``: model-supplied
+    free text (phase/unit) is presentation-only here and must never leak a
+    raw secret into a composer-adjacent surface.
+    """
+    text = _bounded_activity_text(value, limit)
+    if text is None:
+        return None
+    try:
+        from agent.redact import redact_sensitive_text
+
+        text = redact_sensitive_text(text, force=True)
+    except Exception:
+        return "Details unavailable"
+    return _bounded_activity_text(text, limit)
+
+
+def _activity_opt_int(value: Any) -> Optional[int]:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _row_value(row: Any, col: str) -> Any:
+    """``row[col]`` tolerant of the column being absent (fallback SELECT)."""
+    try:
+        return row[col] if col in row.keys() else None
+    except Exception:
+        return None
 
 
 def activity_board_scope() -> Optional[str]:
@@ -211,22 +258,47 @@ def get_activity_snapshot(*, board: str) -> dict:
                 if row["parent_rank"] <= ACTIVITY_MAX_PARENTS_PER_TASK
             ]
 
-        run_rows = conn.execute(
-            f"""
-            SELECT r.id, r.task_id, r.profile, r.started_at, r.ended_at,
-                   r.outcome, r.last_heartbeat_at, r.max_runtime_seconds
-              FROM task_runs r
-             WHERE r.task_id IN ({placeholders})
-               AND r.id = (
-                   SELECT latest.id
-                     FROM task_runs latest
-                    WHERE latest.task_id = r.task_id
-                    ORDER BY latest.started_at DESC, latest.id DESC
-                    LIMIT 1
-               )
-            """,
-            task_ids,
-        ).fetchall()
+        run_select_base = (
+            "SELECT r.id, r.task_id, r.profile, r.started_at, r.ended_at, "
+            "       r.outcome, r.last_heartbeat_at, r.max_runtime_seconds "
+        )
+        try:
+            run_rows = conn.execute(
+                f"""
+                {run_select_base}, {", ".join(_RUN_PROGRESS_COLUMNS)}
+                  FROM task_runs r
+                 WHERE r.task_id IN ({placeholders})
+                   AND r.id = (
+                       SELECT latest.id
+                         FROM task_runs latest
+                        WHERE latest.task_id = r.task_id
+                        ORDER BY latest.started_at DESC, latest.id DESC
+                        LIMIT 1
+                   )
+                """,
+                task_ids,
+            ).fetchall()
+            runs_have_progress = True
+        except sqlite3.OperationalError:
+            # Legacy board DB this read-only poller never migrated: no
+            # progress columns yet. Fall back to the pre-P1-B1 column set;
+            # progress fields project as None (unknown), never invented.
+            runs_have_progress = False
+            run_rows = conn.execute(
+                f"""
+                {run_select_base}
+                  FROM task_runs r
+                 WHERE r.task_id IN ({placeholders})
+                   AND r.id = (
+                       SELECT latest.id
+                         FROM task_runs latest
+                        WHERE latest.task_id = r.task_id
+                        ORDER BY latest.started_at DESC, latest.id DESC
+                        LIMIT 1
+                   )
+                """,
+                task_ids,
+            ).fetchall()
 
         reason_rows = conn.execute(
             f"""
@@ -297,6 +369,21 @@ def get_activity_snapshot(*, board: str) -> dict:
                 "outcome": _bounded_activity_text(run["outcome"], 64),
                 "last_heartbeat_at": run["last_heartbeat_at"],
                 "max_runtime_seconds": run["max_runtime_seconds"],
+                # Structured progress (governance P1-B1), additive: unknown
+                # fields stay None (never invented); text is bounded and
+                # secret-redacted; nothing beyond this allowlist leaks.
+                "phase": _activity_progress_text(_row_value(run, "progress_phase"), ACTIVITY_PHASE_MAX_CHARS)
+                if runs_have_progress else None,
+                "unit": _activity_progress_text(_row_value(run, "progress_unit"), ACTIVITY_UNIT_MAX_CHARS)
+                if runs_have_progress else None,
+                "completed": _activity_opt_int(_row_value(run, "progress_completed")) if runs_have_progress else None,
+                "total": _activity_opt_int(_row_value(run, "progress_total")) if runs_have_progress else None,
+                "rate": (float(_row_value(run, "progress_rate"))
+                         if runs_have_progress and _row_value(run, "progress_rate") is not None else None),
+                "eta_seconds": _activity_opt_int(_row_value(run, "progress_eta_seconds")) if runs_have_progress else None,
+                "error_count": _activity_opt_int(_row_value(run, "progress_error_count")) if runs_have_progress else None,
+                "progress_pct": _activity_opt_int(_row_value(run, "progress_pct")) if runs_have_progress else None,
+                "progress_updated_at": _activity_opt_int(_row_value(run, "progress_updated_at")) if runs_have_progress else None,
             }
         for child_id in children[task_id]:
             if child_id not in emitted:

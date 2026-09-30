@@ -4224,6 +4224,32 @@
       return `${(secs / 3600).toFixed(1)}h`;
     };
 
+    // Structured progress (governance P1-B1): one compact line per run from the
+    // LAST structured kanban_heartbeat. Renders nothing when the worker never
+    // sent structured fields; unknown values (missing ETA) are omitted, never
+    // invented.
+    const fmtEta = function (secs) {
+      if (secs == null || !isFinite(secs) || secs < 0) return null;
+      if (secs < 60) return `${Math.round(secs)}s`;
+      if (secs < 3600) return `${Math.round(secs / 60)}m`;
+      return `${(secs / 3600).toFixed(1)}h`;
+    };
+    const progressLine = function (r) {
+      if (!r || r.progress_pct == null) return null;
+      const parts = [];
+      if (r.progress_phase) parts.push(String(r.progress_phase));
+      parts.push(`${r.progress_pct}%`);
+      if (r.progress_total != null && r.progress_total > 0 && r.progress_completed != null) {
+        parts.push(`(${r.progress_completed}/${r.progress_total}${r.progress_unit ? " " + r.progress_unit : ""})`);
+      }
+      const eta = fmtEta(r.progress_eta_seconds);
+      if (eta) parts.push(`ETA ${eta}`);
+      if (r.progress_error_count != null && r.progress_error_count > 0) {
+        parts.push(`${r.progress_error_count} error${r.progress_error_count === 1 ? "" : "s"}`);
+      }
+      return parts.join(" · ");
+    };
+
     return h("div", { className: "hermes-kanban-section" },
       h("div", { className: "hermes-kanban-section-head-row" },
         h("span", { className: "hermes-kanban-section-head" },
@@ -4251,6 +4277,9 @@
             h("span", { className: "hermes-kanban-run-ago" },
               timeAgo ? timeAgo(r.started_at) : ""),
           ),
+          progressLine(r)
+            ? h("div", { className: "hermes-kanban-run-progress" }, progressLine(r))
+            : null,
           r.summary
             ? h("div", { className: "hermes-kanban-run-summary" }, r.summary)
             : null,

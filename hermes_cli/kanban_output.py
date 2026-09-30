@@ -22,13 +22,20 @@ _TASK_DICT_FIELDS = (
     "skills", "max_runtime_seconds", "max_retries", "model_override", "provider_override",
     "session_id", "workflow_template_id", "current_step_key", "completion_contract", "last_failure_error",
 )
+# Structured progress of the last heartbeat (governance P1-B1) — shown by
+# `show --json` and `runs --json` so the CLI matches the tool call exactly.
+_PROGRESS_RUN_FIELDS = (
+    "progress_phase", "progress_unit", "progress_completed", "progress_total",
+    "progress_rate", "progress_eta_seconds", "progress_error_count",
+    "progress_pct", "progress_updated_at",
+)
 _SHOW_RUN_FIELDS = (
     "id", "profile", "step_key", "status", "outcome", "summary", "error",
-    "metadata", "worker_pid", "started_at", "ended_at",
+    "metadata", "worker_pid", "started_at", "ended_at", *_PROGRESS_RUN_FIELDS,
 )
 _RUNS_RUN_FIELDS = (
     "id", "profile", "status", "outcome", "started_at", "ended_at",
-    "summary", "error", "metadata", "worker_pid", "step_key",
+    "summary", "error", "metadata", "worker_pid", "step_key", *_PROGRESS_RUN_FIELDS,
 )
 _ATTACHMENT_FIELDS = ("id", "filename", "content_type", "size", "uploaded_by", "stored_path", "created_at")
 

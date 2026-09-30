@@ -502,6 +502,18 @@ export interface KanbanActivityRun {
   profile: null | string
   run_id: number
   started_at: null | number
+  // Structured progress of the last kanban_heartbeat (governance P1-B1).
+  // Optional: backends before P1-B1 (and legacy board DBs) omit them;
+  // absent/unknown is null, never invented.
+  phase?: null | string
+  completed?: null | number
+  total?: null | number
+  unit?: null | string
+  rate?: null | number
+  eta_seconds?: null | number
+  error_count?: null | number
+  progress_pct?: null | number
+  progress_updated_at?: null | number
 }
 
 export interface KanbanActivityTask {

@@ -20,6 +20,18 @@ export interface ActivityRun {
   profile: null | string
   runId: null | number
   startedAt: null | number
+  // Structured progress of the last kanban_heartbeat (governance P1-B1).
+  // Optional so existing fixtures / older wire payloads stay valid; unknown
+  // values are null, never invented.
+  phase?: null | string
+  completed?: null | number
+  total?: null | number
+  unit?: null | string
+  rate?: null | number
+  etaSeconds?: null | number
+  errorCount?: null | number
+  progressPct?: null | number
+  progressUpdatedAt?: null | number
 }
 
 export interface ActivityTask {
@@ -146,7 +158,18 @@ function normalizeRun(value: unknown): ActivityRun | null {
     outcome: cleanText(raw.outcome, '', 40) || null,
     profile: cleanText(raw.profile, '', 80) || null,
     runId,
-    startedAt: finiteNumber(raw.started_at)
+    startedAt: finiteNumber(raw.started_at),
+    // Structured progress (governance P1-B1): mapped, bounded, dropped-safe
+    // when an older backend omits the fields (finiteNumber falls back null).
+    phase: cleanText(raw.phase, '', 80) || null,
+    completed: finiteNumber(raw.completed),
+    total: finiteNumber(raw.total),
+    unit: cleanText(raw.unit, '', 40) || null,
+    rate: finiteNumber(raw.rate),
+    etaSeconds: finiteNumber(raw.eta_seconds),
+    errorCount: finiteNumber(raw.error_count),
+    progressPct: finiteNumber(raw.progress_pct),
+    progressUpdatedAt: finiteNumber(raw.progress_updated_at)
   }
 }
 

@@ -957,6 +957,15 @@
   padding: 0.2rem 0 0;
   color: var(--color-foreground);
 }
+/* Structured progress line (governance P1-B1) — compact, tabular so the
+   percent and ETA don't jitter between polls. */
+.hermes-kanban-run-progress {
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  padding: 0.15rem 0 0;
+  color: var(--color-muted-foreground);
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
 .hermes-kanban-run-error {
   font-size: 0.7rem;
   color: var(--color-destructive, #d14a4a);

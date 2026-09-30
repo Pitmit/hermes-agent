@@ -32,6 +32,18 @@ class KanbanActivityRun(Result):
     outcome: str | None = None
     last_heartbeat_at: int | None = None
     max_runtime_seconds: int | None = None
+    # Structured progress of the last kanban_heartbeat (governance P1-B1),
+    # additive and bounded: None = not reported / unknown (never invented).
+    # phase/unit arrive secret-redacted and length-bounded.
+    phase: str | None = None
+    completed: int | None = None
+    total: int | None = None
+    unit: str | None = None
+    rate: float | None = None
+    eta_seconds: int | None = None
+    error_count: int | None = None
+    progress_pct: int | None = None
+    progress_updated_at: int | None = None
 
 
 class KanbanActivityTask(Result):

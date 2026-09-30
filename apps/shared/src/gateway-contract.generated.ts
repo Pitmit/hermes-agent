@@ -1697,6 +1697,15 @@ export interface KanbanActivityRun {
   outcome?: string | null
   last_heartbeat_at?: number | null
   max_runtime_seconds?: number | null
+  phase?: string | null
+  completed?: number | null
+  total?: number | null
+  unit?: string | null
+  rate?: number | null
+  eta_seconds?: number | null
+  error_count?: number | null
+  progress_pct?: number | null
+  progress_updated_at?: number | null
 }
 export type PingParams = Record<string, never>
 export interface PingResult {

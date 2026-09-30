@@ -272,13 +272,49 @@ KANBAN_HEARTBEAT_SCHEMA = _schema(
         "Signal that you're still alive during a long operation "
         "(training, encoding, large crawls). Call every few minutes so "
         "humans see liveness separately from PID checks. Pure side "
-        "effect — no work changes."
+        "effect — no work changes. When your operation has measurable "
+        "progress, pass the structured fields (phase, completed, total, "
+        "unit, rate, eta_seconds, error_count) so humans see percent "
+        "and ETA. Only send values you actually measured or computed — "
+        "a missing value is reported as unknown, never guessed. "
+        "Invalid values (negative, NaN, completed > total) fail the "
+        "whole call; nothing is recorded — fix and retry."
     ),
     {
         "task_id": _prop("string", _DESC_TASK_ID_DEFAULT),
         "note": _prop("string", (
                 "Optional short note describing current progress. "
                 "Shown in the event log."
+        )),
+        "phase": _prop("string", (
+                "Optional short free-text phase label, e.g. 'encoding', "
+                "'verify' (max 120 chars)."
+        )),
+        "completed": _prop("integer", (
+                "Optional count of finished work items in this run's "
+                "current operation (>= 0). With total, drives the shown "
+                "percent."
+        )),
+        "total": _prop("integer", (
+                "Optional total work items of the operation (>= 0). "
+                "Percent is only shown when total > 0."
+        )),
+        "unit": _prop("string", (
+                "Optional unit label for completed/total, e.g. 'files', "
+                "'frames', 'rows' (max 40 chars)."
+        )),
+        "rate": _prop("number", (
+                "Optional measured throughput in units per second "
+                "(>= 0, finite)."
+        )),
+        "eta_seconds": _prop("integer", (
+                "Optional measured/estimated seconds until the operation "
+                "finishes (>= 0). Omit it when unknown — it is never "
+                "invented from rate."
+        )),
+        "error_count": _prop("integer", (
+                "Optional count of errors encountered so far in this "
+                "operation (>= 0)."
         )),
     },
     [],

@@ -800,6 +800,17 @@ class Run:
     summary: Optional[str]
     metadata: Optional[dict]
     error: Optional[str]
+    # Structured progress of the last kanban_heartbeat (governance P1-B1).
+    # NULL until the worker sends structured fields; see the task_runs DDL.
+    progress_phase: Optional[str] = None
+    progress_unit: Optional[str] = None
+    progress_completed: Optional[int] = None
+    progress_total: Optional[int] = None
+    progress_rate: Optional[float] = None
+    progress_eta_seconds: Optional[int] = None
+    progress_error_count: Optional[int] = None
+    progress_pct: Optional[int] = None
+    progress_updated_at: Optional[int] = None
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> "Run":
@@ -814,6 +825,17 @@ class Run:
             started_at=int(row["started_at"]),
             ended_at=_opt_int(row["ended_at"]),
             metadata=_json_or(_lossy_text(row["metadata"])),
+            # _row_get: a row from a pre-P1-B1 SELECT (or legacy DB opened by a
+            # reader that never migrated) simply yields None for these.
+            progress_phase=_lossy_text(_row_get(row, "progress_phase")),
+            progress_unit=_lossy_text(_row_get(row, "progress_unit")),
+            progress_completed=_opt_int(_row_get(row, "progress_completed")),
+            progress_total=_opt_int(_row_get(row, "progress_total")),
+            progress_rate=_row_get(row, "progress_rate"),
+            progress_eta_seconds=_opt_int(_row_get(row, "progress_eta_seconds")),
+            progress_error_count=_opt_int(_row_get(row, "progress_error_count")),
+            progress_pct=_opt_int(_row_get(row, "progress_pct")),
+            progress_updated_at=_opt_int(_row_get(row, "progress_updated_at")),
         )
 
 
@@ -1037,7 +1059,23 @@ CREATE TABLE IF NOT EXISTS task_runs (
     --          gave_up | reclaimed | (null while still running)
     summary             TEXT,
     metadata            TEXT,
-    error               TEXT
+    error               TEXT,
+    -- Structured progress (governance P1-B1): the LAST structured
+    -- kanban_heartbeat of this run. NULL until the worker sends one; a fresh
+    -- run row starts empty, so a retry never inherits the previous attempt's
+    -- progress. progress_pct is derived from completed/total and is only ever
+    -- set when progress_total > 0; progress_eta_seconds NULL = unknown (never
+    -- invented from rate). Text columns are bounded and secret-redacted at
+    -- write time (kanban_db_dispatch.normalize_progress_heartbeat).
+    progress_phase       TEXT,
+    progress_unit        TEXT,
+    progress_completed   INTEGER,
+    progress_total       INTEGER,
+    progress_rate        REAL,
+    progress_eta_seconds INTEGER,
+    progress_error_count INTEGER,
+    progress_pct         INTEGER,
+    progress_updated_at  INTEGER
 );
 
 -- Files attached to a task (PDFs, images, source documents). The blob

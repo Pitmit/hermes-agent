@@ -509,6 +509,94 @@ def test_heartbeat_extends_claim_expires(worker_env):
     )
 
 
+def _run_progress(worker_env, conn):
+    return conn.execute(
+        "SELECT progress_phase, progress_unit, progress_completed, progress_total, "
+        "       progress_rate, progress_eta_seconds, progress_error_count, "
+        "       progress_pct, progress_updated_at "
+        "FROM task_runs WHERE task_id = ? ORDER BY id DESC LIMIT 1",
+        (worker_env,),
+    ).fetchone()
+
+
+def test_heartbeat_structured_progress_persists(worker_env):
+    """kanban_heartbeat's structured fields (governance P1-B1) land on the
+    current run row and in the heartbeat event, with the derived percent."""
+    from hermes_cli import kanban_db_connect as kbc
+    from tools import kanban_tools as kt
+
+    out = kt._handle_heartbeat({
+        "note": "halfway", "phase": "encode", "completed": 4, "total": 8,
+        "unit": "files", "rate": 0.5, "eta_seconds": 300, "error_count": 1,
+    })
+    assert json.loads(out).get("ok") is True
+
+    with kbc.connect_closing() as conn:
+        row = _run_progress(worker_env, conn)
+        assert (row["progress_phase"], row["progress_unit"]) == ("encode", "files")
+        assert (row["progress_completed"], row["progress_total"]) == (4, 8)
+        assert row["progress_rate"] == 0.5
+        assert row["progress_eta_seconds"] == 300
+        assert row["progress_error_count"] == 1
+        assert row["progress_pct"] == 50
+        assert row["progress_updated_at"] is not None
+        event = conn.execute(
+            "SELECT payload FROM task_events WHERE task_id = ? AND kind = 'heartbeat' "
+            "ORDER BY id DESC LIMIT 1", (worker_env,),
+        ).fetchone()["payload"]
+        payload = json.loads(event)
+        assert payload["note"] == "halfway" and payload["progress_pct"] == 50
+
+
+def test_heartbeat_invalid_progress_fails_closed(worker_env):
+    """Invalid structured values reject the WHOLE call before any write: no
+    heartbeat event, no liveness touch, no claim extension (the model must
+    retry with corrected values; nothing is silently dropped)."""
+    from hermes_cli import kanban_db_connect as kbc
+    from tools import kanban_tools as kt
+
+    with kbc.connect_closing() as conn:
+        conn.execute("UPDATE tasks SET claim_expires = 1 WHERE id = ?", (worker_env,))
+        conn.commit()
+
+    out = kt._handle_heartbeat({"completed": 5, "total": 3, "note": "bad"})
+    d = json.loads(out)
+    assert "error" in d and "exceeds total" in d["error"]
+
+    with kbc.connect_closing() as conn:
+        assert conn.execute(
+            "SELECT last_heartbeat_at FROM tasks WHERE id = ?", (worker_env,)
+        ).fetchone()["last_heartbeat_at"] is None
+        events = conn.execute(
+            "SELECT COUNT(*) AS n FROM task_events WHERE task_id = ? AND kind = 'heartbeat'",
+            (worker_env,),
+        ).fetchone()["n"]
+        assert events == 0
+        assert _run_progress(worker_env, conn)["progress_pct"] is None
+        # claim untouched: the rejected call extended nothing
+        assert conn.execute(
+            "SELECT claim_expires FROM tasks WHERE id = ?", (worker_env,)
+        ).fetchone()["claim_expires"] == 1
+
+    # a corrected retry works and persists
+    assert json.loads(kt._handle_heartbeat({"completed": 3, "total": 5})).get("ok") is True
+    with kbc.connect_closing() as conn:
+        assert _run_progress(worker_env, conn)["progress_pct"] == 60
+
+
+def test_heartbeat_redacts_free_text_progress(worker_env):
+    """phase/unit are model free text flowing into bounded projections — they
+    are stored secret-redacted, same redactor as kanban_comment bodies."""
+    from hermes_cli import kanban_db_connect as kbc
+    from tools import kanban_tools as kt
+
+    secret = "sk-abc123def456ghi789"
+    assert json.loads(kt._handle_heartbeat({"phase": f"token {secret}"})).get("ok") is True
+    with kbc.connect_closing() as conn:
+        stored = _run_progress(worker_env, conn)["progress_phase"]
+    assert secret not in (stored or "")
+
+
 def _expire_claim(conn, tid):
     conn.execute("UPDATE tasks SET claim_expires = 1 WHERE id = ?", (tid,))
     conn.commit()

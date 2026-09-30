@@ -452,7 +452,7 @@ Dispatcher-owned workers receive their task lifecycle tools automatically.
 | `kanban_request_review` | Start same-card review with a durable `summary`, optional `metadata`, and optional reviewer profile. The task moves to `review`; this is not a block. | `summary` |
 | `kanban_request_changes` | Reviewer verdict from an active review run. Closes that run, reapplies parent gating, and routes the task to its original implementer without block-loop accounting. | `reason` |
 | `kanban_block` | Stop work and route by why: `kind=dependency` (waits in `todo`, auto-resumes when an incomplete parent finishes; with no open parent it is recorded as `needs_input` instead, since the wait could never be satisfied), `needs_input`/`capability`/`transient` (surface to a human). Repeated same-kind re-blocks auto-escalate to `triage`. | `reason` |
-| `kanban_heartbeat` | Signal liveness during long operations. Pure side-effect. | — |
+| `kanban_heartbeat` | Signal liveness during long operations. Pure side-effect. Optional structured progress fields (`phase`, `completed`, `total`, `unit`, `rate`, `eta_seconds`, `error_count`) make percent/ETA visible to humans; percent only shows with `total > 0`, unknown ETA is never invented, and invalid values (negative, NaN, `completed > total`) reject the whole call without recording anything. | — |
 | `kanban_comment` | Append a durable note to the task thread. | `task_id`, `body` |
 | `kanban_attach` | Attach a file to a task by passing its bytes inline (base64); stored under the task's attachments dir (25 MB cap). | file bytes + name |
 | `kanban_attach_url` | Attach a file to a task by URL. | `url` |
@@ -467,7 +467,7 @@ A typical worker turn looks like:
 # Model's tool calls, in order:
 kanban_show()                                     # no args — uses HERMES_KANBAN_TASK
 # (model reads the returned worker_context, does the work via terminal/file tools)
-kanban_heartbeat(note="halfway through — 4 of 8 files transformed")
+kanban_heartbeat(note="halfway through", phase="transform", completed=4, total=8, unit="files", eta_seconds=300)
 # (more work)
 kanban_complete(
     summary="migrated limiter.py to token-bucket; added 14 tests, all pass",
@@ -550,7 +550,7 @@ Every profile that works kanban tasks automatically gets the worker lifecycle �
 
 1. On spawn, call `kanban_show()` to read title + body + parent handoffs + prior attempts + full comment thread.
 2. `cd $HERMES_KANBAN_WORKSPACE` (via the terminal tool) and do the work there.
-3. Call `kanban_heartbeat(note="...")` every few minutes during long operations. **If your work may run longer than 1 hour, call `kanban_heartbeat` at least once an hour** — the dispatcher reclaims tasks that have been running past `kanban.dispatch_stale_timeout_seconds` (default 4 h) with no heartbeat in the last hour, on the assumption the worker crashed without cleanup. A reclaim is benign (the task goes back to `ready` for re-dispatch without a failure-counter tick) but you lose your current run's progress.
+3. Call `kanban_heartbeat(note="...")` every few minutes during long operations. When the operation has measurable progress, pass the structured fields too (`phase`, `completed`, `total`, `unit`, `rate`, `eta_seconds`, `error_count`) — the dashboard's run drawer then shows percent and ETA; omit values you don't know (they are reported as unknown, never invented, and invalid values reject the call without recording anything). **If your work may run longer than 1 hour, call `kanban_heartbeat` at least once an hour** — the dispatcher reclaims tasks that have been running past `kanban.dispatch_stale_timeout_seconds` (default 4 h) with no heartbeat in the last hour, on the assumption the worker crashed without cleanup. A reclaim is benign (the task goes back to `ready` for re-dispatch without a failure-counter tick) but you lose your current run's progress.
 4. Complete with `kanban_complete(summary="...", metadata={...})`, hand a code change off for same-card review with `kanban_request_review(summary="...")`, or `kanban_block(reason="...")` if stuck.
 
 Normal tool activity also extends the claim automatically (the worker mirrors its in-process liveness onto the board about once a minute). That bridge only works for a process the dispatcher spawned itself: a process that carries `HERMES_DELEGATED_CHILD_CONTEXT` next to `HERMES_KANBAN_TASK` (a `delegate_task` descendant, or a hand-launched copy of a worker's environment) is fenced from the board — its auto-heartbeat logs one `kanban auto-heartbeat for task … refused` warning and `kanban_complete` / `kanban_request_review` refuse. Fix the launch (let the dispatcher spawn the worker) rather than exporting the marker away.

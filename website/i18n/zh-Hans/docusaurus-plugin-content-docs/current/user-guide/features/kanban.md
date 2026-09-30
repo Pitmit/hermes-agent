@@ -203,7 +203,7 @@ hermes kanban block    t_abc "need input" --ids t_def t_hij
 | `kanban_request_review` | 启动同卡审查，携带 `summary`、可选 `metadata` 和 reviewer profile；任务移入 `review`，且不计入 block 循环。 | `summary` |
 | `kanban_request_changes` | reviewer 在活动审查 run 中要求修改：关闭审查 run，重新检查父依赖，并把任务交还原 implementer。 | `reason` |
 | `kanban_block` | 以 `reason` 上报需要人工输入。 | `reason` |
-| `kanban_heartbeat` | 在长时间操作期间发出存活信号。纯副作用。 | — |
+| `kanban_heartbeat` | 在长时间操作期间发出存活信号。纯副作用。可选的结构化进度字段（`phase`、`completed`、`total`、`unit`、`rate`、`eta_seconds`、`error_count`）让人类看到百分比和 ETA；百分比仅在 `total > 0` 时显示，未知 ETA 永不臆造，非法值（负数、NaN、`completed > total`）会拒绝整个调用且不记录任何内容。 | — |
 | `kanban_comment` | 向任务线程追加持久化备注。 | `task_id`、`body` |
 | `kanban_create` | （编排器）将任务扇出为带有 `assignee`、可选 `parents`、`skills` 等的子任务。 | `title`、`assignee` |
 | `kanban_link` | （编排器）事后添加 `parent_id → child_id` 依赖边。 | `parent_id`、`child_id` |
@@ -215,7 +215,7 @@ hermes kanban block    t_abc "need input" --ids t_def t_hij
 # 模型的工具调用，按顺序：
 kanban_show()                                     # 无参数 —— 使用 HERMES_KANBAN_TASK
 # （模型读取返回的 worker_context，通过终端/文件工具完成工作）
-kanban_heartbeat(note="halfway through — 4 of 8 files transformed")
+kanban_heartbeat(note="halfway through", phase="transform", completed=4, total=8, unit="files", eta_seconds=300)
 # （更多工作）
 kanban_complete(
     summary="migrated limiter.py to token-bucket; added 14 tests, all pass",

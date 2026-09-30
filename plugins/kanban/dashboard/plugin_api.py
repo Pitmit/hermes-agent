@@ -913,7 +913,10 @@ def list_active_workers(board: Optional[str] = _BOARD_Q):
         rows = conn.execute(
             "SELECT r.id AS run_id, r.task_id, t.title AS task_title, t.status AS task_status, "
             "t.assignee AS task_assignee, r.profile, r.worker_pid, r.started_at, r.claim_lock, "
-            "r.claim_expires, r.last_heartbeat_at, r.max_runtime_seconds "
+            "r.claim_expires, r.last_heartbeat_at, r.max_runtime_seconds, "
+            "r.progress_phase, r.progress_unit, r.progress_completed, r.progress_total, "
+            "r.progress_rate, r.progress_eta_seconds, r.progress_error_count, "
+            "r.progress_pct, r.progress_updated_at "
             "FROM task_runs r JOIN tasks t ON t.id = r.task_id "
             "WHERE r.ended_at IS NULL AND r.worker_pid IS NOT NULL AND t.status = 'running' "
             "ORDER BY r.started_at ASC").fetchall()

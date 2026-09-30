@@ -8,6 +8,7 @@ late-bound via ``_kb`` (import-cycle breaking) so monkeypatching
 from __future__ import annotations
 
 import contextlib
+import math
 import os
 import re
 import signal
@@ -626,13 +627,20 @@ def heartbeat_worker(
     *,
     note: Optional[str] = None,
     expected_run_id: Optional[int] = None,
+    progress: Optional[Mapping] = None,
 ) -> bool:
     """Record a ``heartbeat`` event + touch ``last_heartbeat_at``.
 
     Liveness signal orthogonal to the PID check: a worker whose forked child
     (train loop, crawl) is stuck can still have a live Python process.
     Returns False if the task is not running or its claim expired.
+
+    ``progress`` (governance P1-B1) carries the structured fields of a
+    ``kanban_heartbeat`` call (phase/completed/total/unit/rate/eta_seconds/
+    error_count). It is validated fail-closed by :func:`normalize_progress_heartbeat`
+    — an invalid value raises ``ValueError`` BEFORE anything is persisted.
     """
+    fields = normalize_progress_heartbeat(progress) or {}
     now = int(time.time())
     with _kb.write_txn(conn):
         sql = "UPDATE tasks SET last_heartbeat_at = ? WHERE id = ? AND status = 'running'"
@@ -650,12 +658,108 @@ def heartbeat_worker(
         )
         if run_id is not None:
             conn.execute("UPDATE task_runs SET last_heartbeat_at = ? WHERE id = ?", (now, run_id))
+            if fields:
+                # Column names come from a fixed table, never from the payload.
+                sets = ", ".join(f"{col} = ?" for col in (_PROGRESS_COLUMNS[k] for k in fields))
+                conn.execute(
+                    f"UPDATE task_runs SET {sets}, progress_updated_at = ? WHERE id = ?",
+                    (*fields.values(), now, run_id),
+                )
+        payload: Optional[dict] = None
+        if note or fields:
+            # Additive keys next to the legacy ``note`` — old payloads
+            # ({"note": ...} or None) stay byte-identical.
+            payload = {**({"note": note} if note else {}), **fields}
         _kb._append_event(
             conn, task_id, "heartbeat",
-            {"note": note} if note else None,
+            payload,
             run_id=run_id,
         )
     return True
+
+
+# Structured progress (governance P1-B1): the tool-level field names of
+# kanban_heartbeat map 1:1 onto the task_runs columns; progress_pct is derived
+# and progress_updated_at is stamped by heartbeat_worker.
+_PROGRESS_COLUMNS = {
+    "phase": "progress_phase",
+    "completed": "progress_completed",
+    "total": "progress_total",
+    "unit": "progress_unit",
+    "rate": "progress_rate",
+    "eta_seconds": "progress_eta_seconds",
+    "error_count": "progress_error_count",
+    "progress_pct": "progress_pct",
+}
+
+_PROGRESS_TEXT_LIMITS = {"phase": 120, "unit": 40}
+_PROGRESS_COUNTS = ("completed", "total", "eta_seconds", "error_count")
+
+
+def _progress_count(value: Any, key: str) -> int:
+    """A finite, non-negative whole number — or ``ValueError`` (fail-closed)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{key} must be a number >= 0, got {value!r}")
+    if not math.isfinite(value):
+        raise ValueError(f"{key} must be a finite number, got {value!r}")
+    if value < 0:
+        raise ValueError(f"{key} must be >= 0, got {value!r}")
+    if isinstance(value, float) and not value.is_integer():
+        raise ValueError(f"{key} must be a whole number, got {value!r}")
+    return int(value)
+
+
+def normalize_progress_heartbeat(progress: Optional[Mapping]) -> Optional[dict]:
+    """Validate + normalize the structured progress fields of a heartbeat.
+
+    Fail-closed: every invalid value (negative, NaN/infinite, boolean,
+    non-integral count, wrong type, ``completed > total``, ``completed > 0``
+    with ``total == 0``) raises ``ValueError`` BEFORE anything is persisted —
+    the caller turns it into a tool error and no column, event, or claim
+    extension is written. Returns ``None`` when no structured field is present.
+
+    Semantics: ``progress_pct`` is derived ONLY when both ``completed`` and a
+    ``total > 0`` are given (a missing total means "unmeasurable", never 0%);
+    an absent ``eta_seconds`` stays absent (unknown is unknown, never invented
+    from ``rate``). Non-monotone updates are allowed — estimates may get worse,
+    every change stays visible in the event log. ``phase``/``unit`` are
+    collapsed to single-line text and bounded.
+    """
+    if not progress:
+        return None
+    unknown = sorted(set(progress) - set(_PROGRESS_COLUMNS))
+    if unknown:
+        raise ValueError(f"unknown progress fields: {unknown}")
+    out: dict = {}
+    for key, limit in _PROGRESS_TEXT_LIMITS.items():
+        value = progress.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, str):
+            raise ValueError(f"{key} must be a string, got {type(value).__name__}")
+        text = " ".join(value.split())
+        if not text:
+            raise ValueError(f"{key} must not be blank")
+        out[key] = text[:limit]
+    for key in _PROGRESS_COUNTS:
+        if progress.get(key) is not None:
+            out[key] = _progress_count(progress[key], key)
+    rate = progress.get("rate")
+    if rate is not None:
+        if isinstance(rate, bool) or not isinstance(rate, (int, float)) or not math.isfinite(rate):
+            raise ValueError(f"rate must be a finite number >= 0, got {rate!r}")
+        if rate < 0:
+            raise ValueError(f"rate must be >= 0, got {rate!r}")
+        out["rate"] = float(rate)
+    completed, total = out.get("completed"), out.get("total")
+    if completed is not None and total is not None:
+        if total == 0 and completed > 0:
+            raise ValueError(f"completed={completed} with total=0 is inconsistent")
+        if completed > total:
+            raise ValueError(f"completed={completed} exceeds total={total}")
+        if total > 0:
+            out["progress_pct"] = int(round(completed * 100 / total))
+    return out
 
 
 def enforce_max_runtime(conn: sqlite3.Connection, *, signal_fn=None) -> list[str]:

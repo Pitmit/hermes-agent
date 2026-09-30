@@ -872,6 +872,17 @@ _TASK_RUN_COLUMNS = (
     # Spawn-time start fingerprint of the run's worker_pid (PID-reuse guard for the
     # terminal-worker reaper; NULL = legacy row, never signalled).
     ("worker_started_at", "worker_started_at INTEGER"),
+    # Structured progress of the last kanban_heartbeat (governance P1-B1);
+    # NULL until the first structured heartbeat. Same DDL as SCHEMA_SQL.
+    ("progress_phase", "progress_phase TEXT"),
+    ("progress_unit", "progress_unit TEXT"),
+    ("progress_completed", "progress_completed INTEGER"),
+    ("progress_total", "progress_total INTEGER"),
+    ("progress_rate", "progress_rate REAL"),
+    ("progress_eta_seconds", "progress_eta_seconds INTEGER"),
+    ("progress_error_count", "progress_error_count INTEGER"),
+    ("progress_pct", "progress_pct INTEGER"),
+    ("progress_updated_at", "progress_updated_at INTEGER"),
 )
 
 

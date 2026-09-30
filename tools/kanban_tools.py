@@ -953,19 +953,52 @@ def _handle_request_changes(args: dict, **kw) -> str:
         return _ok_landed(kb, conn, tid, "ready", implementer=detail)
 
 
+# Structured progress args of kanban_heartbeat (governance P1-B1); the values
+# are validated fail-closed by the kernel (normalize_progress_heartbeat).
+_HEARTBEAT_PROGRESS_KEYS = ("phase", "completed", "total", "unit", "rate", "eta_seconds", "error_count")
+
+
+def _heartbeat_progress_args(args: dict) -> Optional[dict]:
+    """Extract + validate the structured progress fields BEFORE any write.
+
+    Fail-closed: an invalid value raises ``_Reject`` here, so no claim
+    extension, column, or event is persisted for a rejected call. The
+    model retries with corrected values; nothing is silently dropped.
+    """
+    raw = {key: args[key] for key in _HEARTBEAT_PROGRESS_KEYS if args.get(key) is not None}
+    if not raw:
+        return None
+    from hermes_cli import kanban_db_dispatch as kbd
+    try:
+        fields = kbd.normalize_progress_heartbeat(raw)
+    except ValueError as exc:
+        raise _Reject(
+            f"kanban_heartbeat rejected structured progress: {exc}. "
+            f"Nothing was recorded (no heartbeat, no claim extension) — "
+            f"fix the values and retry the call.")
+    for key in ("phase", "unit"):
+        # Free-text fields flow into bounded projections; store them
+        # secret-safe by construction (same redactor as kanban_comment).
+        if fields.get(key):
+            fields[key] = _redact(fields[key])
+    return fields
+
+
 @_kanban_handler("kanban_heartbeat")
 def _handle_heartbeat(args: dict, **kw) -> str:
     """Signal liveness: extend the claim TTL AND record a heartbeat event.
     Without the claim half, a worker blocked in one long tool call would still
     be reclaimed by ``release_stale_claims``."""
     tid = _worker_guard("kanban_heartbeat", args)
+    progress = _heartbeat_progress_args(args)
     from hermes_cli import kanban_db_dispatch as kbd
     with _board(args.get("board")) as (kb, conn):
         # The dispatcher pins HERMES_KANBAN_CLAIM_LOCK at spawn; the default
         # claimer covers locally-driven workers that bypassed the dispatcher.
         kb.heartbeat_claim(conn, tid, claimer=os.environ.get("HERMES_KANBAN_CLAIM_LOCK"))
         ok = kbd.heartbeat_worker(
-            conn, tid, note=args.get("note"), expected_run_id=_worker_run_id(tid))
+            conn, tid, note=args.get("note"), expected_run_id=_worker_run_id(tid),
+            progress=progress)
         _check(ok, f"could not heartbeat {tid} (unknown id or not running)")
         return _ok(task_id=tid)
 
