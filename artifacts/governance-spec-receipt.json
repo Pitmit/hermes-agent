@@ -1,0 +1,103 @@
+{
+  "task_id": "t_ff05f719",
+  "tenant": "pscs",
+  "created_at": "2026-09-30T09:18:41Z",
+  "workspace": "/home/hermes/.hermes/kanban/workspaces/hermes-kanban-governance",
+  "branch": "feat/kanban-governance-p0",
+  "base_sha": "bb0785e73b0154fcffb449c2f2319d7e49597c18",
+  "commit_message": "docs: specify kanban governance layer",
+  "deliverables": [
+    {
+      "path": "docs/kanban-governance-spec.md",
+      "sha256": "f3e7f4bf3f3e5e695a63b526055d2d504298f247f5c4dbfac640d849f3792ea8",
+      "bytes": 46744
+    },
+    {
+      "path": "artifacts/governance-spec-receipt.json",
+      "sha256": "self",
+      "note": "sha256 of this file cannot be embedded in itself; verify via sha256sum at commit"
+    }
+  ],
+  "scope": "Spezifikation + Migrationsplan fuer Paperclip-inspirierte Kanban-Governance, Hermes-nativ, ohne zweite Control Plane. Kein Code.",
+  "stages": [
+    "1_Kostenledger_und_Monatsbudgets",
+    "2_Generative_Approvals",
+    "3_Projects_Goals_ueber_project_id",
+    "4_Blocked_Inbox",
+    "5_Reviewer_Watchdog",
+    "6_Routines_Workflow_Templates",
+    "7_Progress_ETA_Heartbeats_Dashboard",
+    "8_OutOfScope_RBAC_Mobile"
+  ],
+  "research_findings": {
+    "search_method": "grep/search_files im Shared-Repo (Base bb0785e73b) ueber hermes_cli/kanban*.py, cron/, tools/, agent/, plugins/kanban/, tui_gateway/, website/docs/",
+    "dormant_or_absent": [
+      {
+        "feature": "Budgets/Kostenledger je task_run",
+        "status": "absent",
+        "evidence": "grep budget|approval|ledger|cost_ in hermes_cli/kanban*.py: nur Spawn-/Retry-/Turn-Budgets; Kosten nur in hermes_state_usage.py (session_model_usage, pro Profil-state.db) und hermes_cli/model_cost_guard.py (Modellauswahl-Warnung)"
+      },
+      {
+        "feature": "Generische Approvals",
+        "status": "absent",
+        "evidence": "kanban-seitig nur Review-Freigaben (kanban_db.py:2737-2877); hermes_cli/approval_mode.py ist Tool-Call-Approval (andere Domaene)"
+      },
+      {
+        "feature": "Projects: Ziel/Owner/Budget/Rollup",
+        "status": "absent",
+        "evidence": "hermes_cli/projects_db.py Schema ohne Governance-Felder; tasks.project_id existiert (kanban_db.py:889-892) und ist unveraendert aktivierbar"
+      },
+      {
+        "feature": "Blocked Inbox",
+        "status": "absent",
+        "evidence": "grep inbox in hermes_cli/kanban*.py, tools/kanban_tools.py, plugins/kanban = 0 Treffer; severity/age-Eskalation aber in kanban_diagnostics.py vorhanden"
+      },
+      {
+        "feature": "Watchdog (Governance)",
+        "status": "partial_basis",
+        "evidence": "kanban_diagnostics.py ist eine read-only Regel-Engine mit severity und Auto-Clear (Erweiterungspunkt); hermes_startup_watchdog.py = Gateway-Startup, andere Domaene"
+      },
+      {
+        "feature": "Reviewer-Rundenlimit/Outcome-Fingerprint",
+        "status": "absent",
+        "evidence": "grep round|unchanged in hermes_cli/kanban*.py: 0 relevante Treffer; Review-Flow + sdlc-review-Dispatch existieren (kanban_db_dispatch.py:1785-1796, 2194-2196)"
+      },
+      {
+        "feature": "Workflow-Templates",
+        "status": "dormant",
+        "evidence": "tasks.workflow_template_id/current_step_key v2-Forward-Compat, in v1 unbenutzt (kanban_db.py:918-922, 1005-1007); Parser/Dashboard exponieren sie bereits; kein Template-Store, kein Cron->Kanban"
+      },
+      {
+        "feature": "Strukturierte Progress/ETA",
+        "status": "absent",
+        "evidence": "kanban_heartbeat nur Freitext-note (tools/kanban_tools.py:497-555, kanban_db_dispatch.py:610-645); TUI-Projektion traegt nur last_heartbeat_at/outcome"
+      }
+    ],
+    "reused_existing": [
+      "session_model_usage-Feldsemantik (estimated/actual_cost_usd, cost_status, cost_source) fuer Ledger-Schema",
+      "block_kind + BLOCK_RECURRENCE_LIMIT + Sticky-Block als Inbox-Basis",
+      "kanban_diagnostics.py Regel-Registry als Watchdog-Erweiterungspunkt",
+      "idempotency_key (kanban_db.py:1260-1329) + cron Occurrence-Ledger (#107485) fuer Routines",
+      "review_dispatch + sdlc-review + claim_review_task als Reviewer-Basis",
+      "add_column_if_missing-Migrationsmuster (kanban_db_connect.py:797/820/833)"
+    ]
+  },
+  "invariants_preserved": [
+    "completion_contract/PR-Acceptance-Gate",
+    "Claim-Fence (PID + Startzeit-Fingerprint)",
+    "Review-Exemptions (Mensch voucht)",
+    "Board hart / Tenant weich",
+    "Claim-Allowlist je Home, max_in_progress-Caps",
+    "Sticky-Block + Recurrence->triage",
+    "Artifact-Semantik",
+    "kein Auto-Unblock menschlicher Gates (needs_input/capability)",
+    "keine zweite Scheduler-/Goal-/Control-Plane"
+  ],
+  "verification": {
+    "spec_read_back": "read_file nach Schreiben (tool-verified: bytes_written=46744)",
+    "receipt_json_parse": "python3 -m json.tool artifacts/governance-spec-receipt.json",
+    "git_diff_check": "git diff --check (leer)",
+    "committed_files": ["docs/kanban-governance-spec.md", "artifacts/governance-spec-receipt.json"],
+    "sentinel_untouched": true
+  }
+}
