@@ -538,6 +538,7 @@ from cron.jobs import (
     _ensure_cron_dir, advance_next_runs, claim_dispatch, claim_job_for_fire, fire_claim_fence,
     clear_run_claim, get_due_jobs, heartbeat_fire_claim, heartbeat_run_claim, mark_job_run,
     save_job_output, self_removal_delivery_allowed, self_removal_delivery_scope, use_cron_store)
+from cron.kanban_routine import run_kanban_routine_job
 from cron.executions import (
     _TERMINAL_STATES, HANDOFF_ADOPTION_GRACE_SECONDS, create_execution, finish_execution,
     get_execution, mark_execution_handoff_pending, mark_execution_running,
@@ -2183,6 +2184,15 @@ def _prepare_job_prompt(
     """Run every pre-agent gate and build the prompt. Returns ``(early_result, prompt)``: an early
     result short-circuits ``run_job`` (no_agent job, empty payload, monitor gate, wake gate,
     injection block, empty prompt); otherwise ``prompt`` is set."""
+    # Kanban routine (governance stage 6): a job with a `kanban` block never
+    # wakes an agent — the occurrence materializes as ONE kanban task and the
+    # dispatcher spawns the worker. Runs BEFORE the config gate (no model, no
+    # billing — a corrupt config.yaml must not stop deterministic board
+    # maintenance) and before the no_agent short-circuit (a no_agent routine
+    # still runs its script, but cards only on exception).
+    if job.get("kanban") is not None:
+        return run_kanban_routine_job(job, job_id, job_name, cancel_event), None
+
     # Fail closed on a corrupt config.yaml: defaults would let auto-detection bill a provider the
     # user never chose. no_agent jobs are exempt. Escape hatch: HERMES_IGNORE_USER_CONFIG=1.
     if not job.get("no_agent"):

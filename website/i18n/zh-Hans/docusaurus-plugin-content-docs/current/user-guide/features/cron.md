@@ -220,6 +220,64 @@ hermes cron tick
 - `run` — 在下次调度器 tick 时触发任务
 - `remove` — 彻底删除任务
 
+## Kanban 例行任务（cron → 看板，不运行 agent）
+
+带 `kanban` 块的 cron 任务是一个**例行任务（routine）**：每个调度时刻
+只在指定看板上物化为唯一一张 kanban 任务卡，由常规 dispatcher 拉起指派的
+worker —— 该时刻本身永远不会唤醒 agent 会话。cron 引擎仍是唯一的时钟，
+不存在第二套调度器。例行任务是让周期性看板工作（每日分诊、每周评审、
+账单核查）以卡片形式出现的确定性方式。
+
+用独立 CLI 创建（任意 `--kanban-*` 标志即启用例行模式）：
+
+```bash
+hermes cron create "0 9 * * 1" \
+  --kanban-board ops --kanban-title "每周运维评审 {date}" \
+  --kanban-assignee reviewer-a --kanban-priority 120 \
+  --kanban-body-file /srv/runbooks/ops-review.md \
+  --kanban-catch-up all-bounded --kanban-catch-up-bound 5
+```
+
+`hermes cron edit` 提供相同字段（标志在已存储的块上合并；
+`--kanban-clear` 移除该块），`cronjob_manage` 工具同样支持
+（create/update 的 `kanban` 属性，`cronjob list` 中可见）。
+`cron list` 以 "Kanban routine" 行显示该块。
+
+块字段：
+
+| 字段 | 含义 |
+|---|---|
+| `board` | 任务卡创建到的看板 slug（必填） |
+| `title` | 周期任务标题；`{date}` 替换为该时刻的 UTC 日期（必填） |
+| `body_inline` / `body_file` | 任务卡正文 —— 字面文本，或触发时读取的绝对路径（二选一） |
+| `assignee`、`priority` | 设置在每张创建的任务卡上 |
+| `workspace` | 所建任务的 `{kind: scratch\|dir\|worktree, path}` |
+| `catch_up` | 错过时刻的策略：`skip`、`once`（默认）或 `all-bounded` |
+| `catch_up_bound` | `all-bounded` 每次补跑的最大卡片数（1–20，默认 5） |
+| `idempotency_key` | 自定义键模板；必须包含 `{scheduled_instant}` |
+
+确定性保证：
+
+- **每个时刻恰好一张卡。** 时刻键为
+  `routine:{job_id}:{scheduled_instant}`（可自定义），通过看板的幂等机制去重
+  —— 卡片创建后、响应前崩溃，重试或再次触发都会读回已存在的卡片，
+  而不是重复建卡。
+- **补跑策略显式。** 调度器停机跨过多个时刻时，`skip` 不为缺口建卡，
+  `once` 建一张补跑卡，`all-bounded` 向后遍历调度（每个错过的槽位一张卡，
+  不超过上限，遇到已有卡片的槽位即停），停机绝不可能淹没看板。
+- **`no_agent` 例行任务仍是脚本。** 使用 `--no-agent` 加脚本时，脚本就是
+  任务本身（stdout 照常投递）；只有异常时才产生 kanban 工作 —— 失败的
+  运行创建一张带脚本输出的异常卡，用同一时刻键去重。
+- **溯源。** 每个物化的时刻在任务卡上写入 `routine_occurrence` 事件
+  （任务 id、调度时刻、触发分类）—— `kanban show`/`kanban log` 可将卡片
+  追溯到其例行任务。
+- **旧任务不受影响。** 不带 `kanban` 块的任务行为与之前完全一致；
+  该块仅在配置时才存储。
+
+例行任务上禁止设置 prompt（工作描述属于
+`body_inline`/`body_file`），monitor 源同样被拒绝 —— 例行任务从不运行
+agent，两者都没有可门控的对象。
+
 ## 工作原理
 
 **Cron 执行由 gateway 守护进程处理。** Gateway 每 60 秒 tick 一次调度器，在隔离的 agent 会话中运行到期的任务。

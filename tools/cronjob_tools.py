@@ -569,6 +569,7 @@ def _action_create(a: Dict[str, Any]) -> str:
         return tool_error("schedule is required for create", success=False)
     canonical_skills = _canonical_skills(a["skill"], a["skills"])
     _no_agent = bool(a["no_agent"])
+    _kanban = a["kanban"] if isinstance(a["kanban"], dict) and a["kanban"] else None
     # no_agent=True -> the script IS the job (prompt/skills optional); else prompt or skills.
     if _no_agent:
         if not script:
@@ -579,8 +580,10 @@ def _action_create(a: Dict[str, Any]) -> str:
                 "non-empty stdout is delivered verbatim, empty stdout "
                 "sends nothing (watchdog pattern), and a non-zero exit or timeout sends an error alert.",
                 success=False)
-    elif not prompt and not canonical_skills:
-        return tool_error("create requires either prompt or at least one skill", success=False)
+    elif not prompt and not canonical_skills and not _kanban:
+        return tool_error(
+            "create requires either prompt, at least one skill, or a kanban routine block",
+            success=False)
     error = (
         (prompt and _scan_cron_prompt(prompt))
         or (script and _validate_cron_script_path(script))
@@ -618,6 +621,7 @@ def _action_create(a: Dict[str, Any]) -> str:
             # CLI-only lane: absent from CRONJOB_SCHEMA and the model dispatch (models don't pick models).
             reasoning_effort=a["reasoning_effort"],
             pinned=bool(a["pinned"]),
+            kanban=_kanban,
             failure_deliver=_resolve_cron_context_deliver(_normalize_deliver_param(a["failure_deliver"])),
             **({"paused": a["paused"], "paused_reason": a["paused_reason"]}
                if a["paused"] is not False or a["paused_reason"] is not None else {}))
@@ -849,7 +853,19 @@ def _update_run_fields(job: Dict[str, Any], a: Dict[str, Any], updates: Dict[str
 
 
 # Validation order is behavior (first failing field wins): keep this sequence.
-_UPDATE_STEPS = (_update_core_fields, _update_script_fields, _update_context_from, _update_run_fields)
+# The kanban block's shape/cross-field validation lives in cron.jobs (create/update).
+def _update_kanban_fields(job: Dict[str, Any], a: Dict[str, Any], updates: Dict[str, Any]) -> Optional[str]:
+    """kanban routine block (governance stage 6): a dict replaces the stored
+    block, ``{}`` clears it, None (absent) leaves it untouched. Shape and
+    cross-field validation live in ``cron.jobs.update_job`` — the shared
+    chokepoint with the CLI."""
+    if a["kanban"] is None:
+        return None
+    updates["kanban"] = a["kanban"] or None
+    return None
+
+
+_UPDATE_STEPS = (_update_core_fields, _update_script_fields, _update_context_from, _update_run_fields, _update_kanban_fields)
 
 
 def _action_update(job: Dict[str, Any], a: Dict[str, Any]) -> str:
@@ -926,7 +942,8 @@ def cronjob(
     session_id: Optional[str] = None,
     paused: bool = False,
     paused_reason: Optional[str] = None,
-    pinned: Optional[bool] = None) -> str:
+    pinned: Optional[bool] = None,
+    kanban: Optional[Dict[str, Any]] = None) -> str:
     """Unified cron job management tool."""
     a = dict(locals())
     del a["task_id"]  # unused but kept for handler signature compatibility
@@ -1032,6 +1049,30 @@ Jobs run in a fresh session with no current-chat context, so prompts must be sel
                 "default": False,
                 "description": "True = no LLM: the scheduler runs `script` (required) on schedule and delivers its stdout verbatim; empty stdout sends nothing (watchdog pattern). Use for script-only pings with fixed output; keep False for anything needing reasoning."
             },
+            "kanban": {
+                "type": "object",
+                "description": "Create/update only: turn the job into a deterministic KANBAN ROUTINE — each scheduled occurrence creates ONE task on a kanban board instead of running an agent; the board's dispatcher spawns the worker. Never combine with prompt or monitor fields. With no_agent=true the script stays the job (stdout delivered as usual) and a task is created ONLY when the script fails (exception card). Update: a dict replaces the block, {} clears it. Fields: board (REQUIRED, board slug), title (REQUIRED; '{date}' becomes the occurrence's UTC date), body_inline (task body text), assignee (worker profile), priority (integer), catch_up ('skip'|'once'|'all-bounded'; what a MISSED occurrence becomes after downtime: nothing / one catch-up card / one card per missed slot), catch_up_bound (integer 1-20, only all-bounded; caps cards per catch-up fire so an outage cannot flood the board), workspace ({kind: 'scratch'|'dir'|'worktree', path}; path requires kind dir/worktree).",
+                "properties": {
+                    "board": {"type": "string", "description": "Kanban board slug the recurring task is created on (required)."},
+                    "title": {"type": "string", "description": "Recurring task title; '{date}' is replaced with the occurrence's UTC date (required)."},
+                    "body_inline": {"type": "string", "description": "Task body text. Use this instead of a prompt — the routine never wakes an agent."},
+                    "assignee": {"type": "string", "description": "Worker profile the created task is assigned to."},
+                    "priority": {"type": "integer", "description": "Task priority (default 0)."},
+                    "catch_up": {"type": "string", "enum": ["skip", "once", "all-bounded"], "description": "Missed-occurrence policy: skip = create nothing for missed slots; once = one catch-up card (default); all-bounded = one card per missed slot, capped by catch_up_bound."},
+                    "catch_up_bound": {"type": "integer", "description": "Max cards per catch-up fire for all-bounded (1-20, default 5)."},
+                    "workspace": {
+                        "type": "object",
+                        "description": "Workspace for the created tasks: {kind: 'scratch'|'dir'|'worktree', path}. path requires kind dir or worktree.",
+                        "properties": {
+                            "kind": {"type": "string", "enum": ["scratch", "dir", "worktree"], "description": "Workspace kind for created tasks (default scratch)."},
+                            "path": {"type": "string", "description": "Workspace path (requires kind dir or worktree)."}
+                        },
+                        "additionalProperties": False
+                    }
+                },
+                "required": ["board", "title"],
+                "additionalProperties": False
+            },
             "context_from": {
                 "type": "array",
                 "items": {"type": "string"},
@@ -1082,7 +1123,7 @@ def check_cronjob_requirements() -> bool:
 _HANDLER_FORWARDED_ARGS = (
     "job_id", "prompt", "schedule", "name", "repeat", "deliver", "failure_deliver", "skill", "skills", "reason",
     "script", "context_from", "continuity", "enabled_toolsets", "workdir", "no_agent", "attach_to_session",
-    "paused_reason", "pinned")
+    "paused_reason", "pinned", "kanban")
 
 
 def _cronjob_handler(args, **kw):

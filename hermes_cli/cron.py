@@ -213,6 +213,20 @@ def _last_run_display(job: Dict[str, Any]) -> str:
     return display
 
 
+def _kanban_routine_row(job: Dict[str, Any]) -> str:
+    """One-line routine summary for ``cron list`` (board, title, catch-up)."""
+    block = job.get("kanban")
+    if not isinstance(block, dict):
+        return ""
+    text = f"{block.get('board')} — {block.get('title')}"
+    if block.get("catch_up"):
+        text += f" (catch-up: {block['catch_up']}"
+        if block.get("catch_up_bound") is not None:
+            text += f", bound {block['catch_up_bound']}"
+        text += ")"
+    return text
+
+
 def _job_rows(job: Dict[str, Any]) -> List[tuple[str, str]]:
     """``(label, value)`` detail rows for one job in ``cron list``."""
     # `repeat` / `deliver` may be present-but-null (dict-default only covers a missing key).
@@ -234,6 +248,7 @@ def _job_rows(job: Dict[str, Any]) -> List[tuple[str, str]]:
         ("Changed", mon_state.get("last_changed_at") if monitor_source else ""),
         ("Mode", color("no-agent", Colors.DIM) + " (script stdout delivered directly)"
          if job.get("no_agent") else ""),
+        ("Kanban routine", _kanban_routine_row(job)),
         ("Workdir", job.get("workdir")),
         ("Last run", f"{job.get('last_run_at', '?')}  {_last_run_display(job)}"
          if job.get("last_status") else ""),
@@ -679,6 +694,67 @@ def _job_api_kwargs(args) -> Dict[str, Any]:
     return {api_key: getattr(args, attr, None) for api_key, attr in _JOB_ARG_FIELDS}
 
 
+# --kanban-* flag dests of the cron create/edit parsers (governance stage 6).
+_KANBAN_ARG_DESTS = (
+    "kanban_board", "kanban_title", "kanban_body_inline", "kanban_body_file",
+    "kanban_assignee", "kanban_priority", "kanban_catch_up", "kanban_catch_up_bound",
+    "kanban_workspace_kind", "kanban_workspace_path", "kanban_idempotency_key")
+
+
+class _KanbanBlockNotProvided:
+    """Sentinel: no --kanban-* flag was given — leave the job's block untouched."""
+
+
+def _kanban_block_from_args(args, existing: Optional[Dict[str, Any]] = None):
+    """Assemble the routine block from --kanban-* flags.
+
+    Returns ``_KanbanBlockNotProvided`` when no flag was given (create: no
+    block; edit: keep the stored one), a dict to persist otherwise. ``existing``
+    (edit) is the merge base so single-field edits keep the rest. Validation
+    (board+title required, catch-up policy, ...) happens in ``cron.jobs`` —
+    the one chokepoint every create/update path shares.
+    """
+    if getattr(args, "kanban_clear", False):
+        return None
+    values = {dest: getattr(args, dest, None) for dest in _KANBAN_ARG_DESTS}
+    if all(value is None for value in values.values()):
+        return _KanbanBlockNotProvided()
+    block: Dict[str, Any] = dict(existing or {})
+    for key, dest in (
+        ("board", "kanban_board"), ("title", "kanban_title"),
+        ("body_inline", "kanban_body_inline"), ("body_file", "kanban_body_file"),
+        ("assignee", "kanban_assignee"), ("priority", "kanban_priority"),
+        ("catch_up", "kanban_catch_up"), ("catch_up_bound", "kanban_catch_up_bound"),
+        ("idempotency_key", "kanban_idempotency_key"),
+    ):
+        if values[dest] is not None:
+            block[key] = values[dest]
+    workspace = dict(block.get("workspace") or {})
+    if values["kanban_workspace_kind"] is not None:
+        workspace["kind"] = values["kanban_workspace_kind"]
+    if values["kanban_workspace_path"] is not None:
+        workspace["path"] = values["kanban_workspace_path"]
+    if workspace:
+        block["workspace"] = workspace
+    return block
+
+
+def _print_kanban_routine(job_data: Dict[str, Any]) -> None:
+    """The routine line of a create/edit echo: board, title, catch-up policy."""
+    block = job_data.get("kanban")
+    if not isinstance(block, dict):
+        return
+    line = f"  Kanban routine: {block.get('board')} — {block.get('title')}"
+    if block.get("catch_up"):
+        line += f" (catch-up: {block['catch_up']}"
+        if block.get("catch_up_bound") is not None:
+            line += f", bound {block['catch_up_bound']}"
+        line += ")"
+    if block.get("assignee"):
+        line += f" → {block['assignee']}"
+    print(line)
+
+
 _JOB_DETAIL_LINES = (
     ("script", "  Script: {}"),
     ("monitor_script", "  Monitor: {} (agent runs only on output change)"),
@@ -698,6 +774,8 @@ def _print_job_details(job_data: Dict[str, Any]) -> None:
 def cron_create(args):
     # The gateway-lifecycle guard lives in cron.jobs.create_job (every creation path); a block
     # surfaces as result["error"].
+    _kanban = _kanban_block_from_args(args)
+    _kanban_kwargs = {} if isinstance(_kanban, _KanbanBlockNotProvided) else {"kanban": _kanban}
     result = _cron_api(
         action="create", schedule=args.schedule, prompt=args.prompt,
         skill=getattr(args, "skill", None),
@@ -705,7 +783,7 @@ def cron_create(args):
         no_agent=getattr(args, "no_agent", False) or None,
         **({"paused": args.paused, "paused_reason": getattr(args, "paused_reason", None)}
            if getattr(args, "paused", False) or getattr(args, "paused_reason", None) is not None else {}),
-        **_job_api_kwargs(args))
+        **_job_api_kwargs(args), **_kanban_kwargs)
     if not result.get("success"):
         print(color(f"Failed to create job: {result.get('error', 'unknown error')}", Colors.RED))
         return 1
@@ -714,6 +792,7 @@ def cron_create(args):
     if result.get("skills"):
         print(f"  Skills: {', '.join(result['skills'])}")
     _print_job_details(result.get("job", {}))
+    _print_kanban_routine(result.get("job", {}))
     if not result.get("job", {}).get("enabled", True):
         print("  Created PAUSED — resume to schedule, or explicitly run now.")
     else:
@@ -747,10 +826,18 @@ def cron_edit(args):
     elif add_skills or remove_skills:
         final_skills = [skill for skill in existing_skills if skill not in remove_skills]
         final_skills += [skill for skill in add_skills if skill not in final_skills]
+    _kanban = _kanban_block_from_args(args, existing=job.get("kanban"))
+    # None (clear) must be distinguishable from "not provided" on the tool
+    # boundary: the tool contract is dict=set, {}=clear, absent=untouched.
+    if isinstance(_kanban, _KanbanBlockNotProvided):
+        _kanban_update_kwargs = {}
+    else:
+        _kanban_update_kwargs = {"kanban": _kanban if _kanban is not None else {}}
     result = _cron_api(action="update", job_id=args.job_id,
                        schedule=getattr(args, "schedule", None),
                        prompt=getattr(args, "prompt", None), skills=final_skills,
-                       no_agent=getattr(args, "no_agent", None), **_job_api_kwargs(args))
+                       no_agent=getattr(args, "no_agent", None), **_job_api_kwargs(args),
+                       **_kanban_update_kwargs)
     if not result.get("success"):
         print(color(f"Failed to update job: {result.get('error', 'unknown error')}", Colors.RED))
         return 1
@@ -760,6 +847,7 @@ def cron_edit(args):
     print(f"  Skills: {', '.join(updated['skills'])}" if updated.get("skills") else
           "  Skills: none")
     _print_job_details(updated)
+    _print_kanban_routine(updated)
     return 0
 
 

@@ -1,0 +1,52 @@
+{
+  "task": "t_ef2c4535",
+  "stage": "Governance P1-A2: Deterministische Kanban-Routinen via Hermes Cron (governance stage 6)",
+  "base_sha": "e4fc794b81",
+  "branch": "feat/kanban-governance-p0",
+  "commit_message": "feat: add kanban routines to hermes cron",
+  "changed_files": [
+    "cron/kanban_routine.py (new, 621 lines: block normalization chokepoint, occurrence identity routine:{job_id}:{scheduled_instant}, catch-up {skip,once,all-bounded} with gap walk + bound, read-back dedupe via tasks.idempotency_key, routine_occurrence provenance event, scheduler bridge run_kanban_routine_job returning the _RunResult shape)",
+    "tests/cron/test_kanban_routine.py (new, 59 tests: block/job-shape validation, API create/update, task-mode occurrences, catch-up policies, DST/UTC identity, no-agent exception cards, legacy jobs unchanged, CLI paths, tool paths)",
+    "cron/scheduler.py (_prepare_job_prompt bridge: a kanban job never wakes an agent; runs BEFORE the config gate and the no_agent short-circuit — no second scheduler loop)",
+    "cron/jobs.py (create_job/update_job validation + kanban payload field; job_payload_is_empty treats the block as a payload; block stored only when configured so pre-feature records stay byte-identical)",
+    "cron/job_definition.py (kanban in JOB_DEFINITION_FIELDS)",
+    "hermes_cli/cron.py (--kanban-* flag assembly, merge-over-stored-block edit semantics, --kanban-clear, 'Kanban routine' row in cron list, create/edit echo)",
+    "hermes_cli/subcommands/cron.py (--kanban-* flags on create + edit parsers)",
+    "tools/cronjob_tools.py (cronjob kanban property: create/update/list paths, nested workspace object schema, {} clears on update)",
+    "tools/cronjob_job_args.py (kanban in _FORMAT_JOB_OPTIONAL_KEYS read path)",
+    "website/docs/user-guide/features/cron.md + zh-Hans twin (Kanban routines section)",
+    "artifacts/run-routine-tests.sh (disposable heavy-test harness)",
+    "artifacts/routine-test-receipt.json (this receipt)"
+  ],
+  "test_host": "vm-worker-gen (VM124, 10.10.10.124), disposable /var/tmp/hermes-governance-routines.uX3VP9 — venv built by run 166 via pm.build_env from this same workspace (editable install, VENV_IMPORT_OK proven before the matrix; source bytes picked up live), HOME/HERMES_HOME/caches under TEST_ROOT, rm -rf after green with proof",
+  "harness": "artifacts/run-routine-tests.sh — free-space proof 115931000 KiB (>= 5 GiB); scripts/run_tests.sh per-file parallel runner (TZ=UTC LANG=C.UTF-8, clean env, 8 workers)",
+  "commands": [
+    "scripts/run_tests.sh tests/cron/test_kanban_routine.py (run 166 first pass: 58 tests, 54 green, 4 fixtures corrected; run 167 re-run: 58/58 green)",
+    "scripts/run_tests.sh tests/cron/test_kanban_routine.py tests/tools/test_cronjob_tools.py tests/tools/test_cronjob_job_args.py (after the tool-schema workspace fix: 133/133 green)",
+    "bash artifacts/run-routine-tests.sh (final full matrix on the exact commit bytes, 12:49:20-12:53:41Z, HARNESS_EXIT=0)"
+  ],
+  "results": {
+    "new_tests": "59/59 passed (tests/cron/test_kanban_routine.py) — 58 from run 166 plus test_tool_create_workspace_round_trips added in run 167 for the workspace-schema fix",
+    "regression_matrix": "2259 tests passed, 0 failed, 8 skipped, across 182 files, SUITE_RC=0 for every lane — CRON_DIR: 141 files, 1453 passed, 3 skipped (whole tests/cron/ tree: scheduler, occurrences, catch-up, DST, claim/fence, bot-chat, delivery); CRON_CLI: 9 files, 95 passed; CRONJOB_TOOLS: 8 files, 137 passed; KANBAN: 23 files, 515 passed, 5 skipped (platforms('windows') lane-skips on linux; same lanes as the watchdog card)",
+    "git_diff_check": "clean (DIFFCHECK_RC=0)",
+    "fix_in_run_167": "tool-schema gap found by review: the cronjob kanban schema advertised flattened workspace_kind/workspace_path properties, but normalize_kanban_block reads only the nested workspace dict — workspace settings sent through the tool would have been silently dropped (created tasks would get scratch workspaces). Fixed by declaring the nested workspace object in the schema (canonical block shape everywhere) + regression test; the full matrix ran on the fixed bytes.",
+    "cleanup": "NO_LEFTOVERS proven after green: /var/tmp/hermes-governance-routines.uX3VP9 and /var/tmp/hermes-routines-current.root EXISTS_AFTER=no, 765776 KiB recovered (df 115935168 -> 116700944 KiB), no processes on the paths (lsof empty). Left untouched: /var/tmp/hermes-test.JMpqRW (another session's 10:47Z artifact, not this task's lineage) and /var/tmp/hermes-laya-build (not removable, not this task's).",
+    "committed_bytes_equal_tested_bytes": "the matrix (12:49-12:53Z) ran after the last source edit (workspace schema fix + docs, before 12:49Z); nothing touched the tracked files afterwards except the receipt/harness additions which the matrix does not import"
+  },
+  "acceptance_criteria_proven": [
+    "stable idempotency key per scheduled occurrence: routine:{job_id}:{scheduled_instant} default, custom template must contain {scheduled_instant} (a template without it would collapse all occurrences into one task — refused fail-closed)",
+    "catch-up {skip,once,all-bounded}: skip materializes nothing for a missed gap (logged no-op with reason), once creates one catch-up card (default), all-bounded walks the schedule backwards (interval and cron expressions, configured zone, DST fall-back fold guard preferring the later instant still before the fire) bounded by catch_up_bound 1..20 default 5, stopping at the first slot that already has a card — an outage can never flood the board",
+    "no duplicate on an open identical run: a task with the occurrence key that already exists (open or done) is read back through tasks.idempotency_key (same predicate create_task applies), never duplicated — the healing path for a lost answer/crash between commit and response; the routine_occurrence provenance event is written only on creation so the audit trail stays exactly-once too",
+    "no-agent routines stay deterministic scripts: the script IS the job (unchanged no_agent semantics, stdout delivered as usual) and kanban work appears ONLY on exception — a failed run creates ONE exception card with the script output (deduped on the same occurrence key); a failure on a skipped catch-up occurrence creates no card",
+    "existing cron scheduler reused: the bridge is one hook in _prepare_job_prompt running BEFORE the config gate (a corrupt config.yaml cannot stop deterministic board maintenance) and before the no_agent short-circuit; no second scheduler engine, no dispatcher changes, occurrence identity rides the existing _scheduled_instant claim plumbing and the executions-ledger at-most-once guarantee",
+    "CLI/API/tool read+create paths: hermes cron create/edit --kanban-* (merge-over-stored-block semantics, --kanban-clear), 'Kanban routine' row in cron list detail, cronjob_manage kanban property (dict replaces / {} clears on update, shown in cronjob list), create_job/update_job as the single validation chokepoint every path shares, cross-field shape re-validated on any payload edit of a merged record",
+    "old cron jobs unchanged: jobs without a kanban block are byte-identical (block stored only when configured; TestLegacyJobsUnchanged proves stored records and create/edit without the block never carry it) and the full tests/cron/ tree passes unchanged",
+    "audit: routine_occurrence task event per materialized occurrence carrying job id, scheduled instant, idempotency key, dispatch classification (on_time/late/catch_up/manual) and exception flag",
+    "manual fires (hermes cron run / cronjob action=run) key on the fire time — every deliberate extra occurrence gets its own card, and cannot collide with occurrence keys"
+  ],
+  "scope": "Strictly per task card: routine definition + existing Hermes-Cron->Kanban integration only. No watchdog changes, no workflow-template changes, no dispatcher changes, no live installation, no restarts, no config keys (the block is per-job data, not a config surface).",
+  "worker_session_ids": [
+    "run 166: full implementation + 58-test suite, 54/58 first pass, 4 fixtures corrected (timed out at the iteration budget before the re-run)",
+    "run 167: re-verified 58/58, found+fixed the tool-schema workspace gap (schema now advertises the nested workspace object; +1 regression test), docs (EN + zh-Hans), full 182-file regression matrix green on the exact commit bytes, receipt, cleanup proof, commit"
+  ]
+}

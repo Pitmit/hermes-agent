@@ -88,6 +88,33 @@ def build_cron_parser(subparsers, *, cmd_cron: Callable) -> None:
         help="Create disabled in one write; resume to schedule, or explicitly run now.")
     cron_create.add_argument("--paused-reason", help="Auditable reason; requires --paused.")
 
+    # Kanban routine (governance stage 6): any --kanban-* flag turns the job
+    # into a deterministic routine — each occurrence creates ONE task on the
+    # given board instead of running an agent.
+    cron_create.add_argument("--kanban-board",
+        help="Kanban board slug the recurring task is created on (enables routine mode)")
+    cron_create.add_argument("--kanban-title",
+        help="Recurring task title ('{date}' is replaced with the occurrence's UTC date)")
+    cron_create.add_argument("--kanban-body-inline",
+        help="Task body text (mutually exclusive with --kanban-body-file)")
+    cron_create.add_argument("--kanban-body-file",
+        help="Absolute path to a file whose content becomes the task body (read at fire time)")
+    cron_create.add_argument("--kanban-assignee", help="Worker profile the task is assigned to")
+    cron_create.add_argument("--kanban-priority", type=int, help="Task priority (default 0)")
+    cron_create.add_argument("--kanban-catch-up", choices=["skip", "once", "all-bounded"],
+        help="Missed-occurrence policy: skip = create nothing for a missed slot; "
+             "once = one catch-up card (default); all-bounded = one card per missed "
+             "slot, bounded by --kanban-catch-up-bound")
+    cron_create.add_argument("--kanban-catch-up-bound", type=int,
+        help="Max cards per catch-up fire for all-bounded (1-20, default 5)")
+    cron_create.add_argument("--kanban-workspace-kind", choices=["scratch", "dir", "worktree"],
+        help="Workspace kind for the created task (default scratch)")
+    cron_create.add_argument("--kanban-workspace-path",
+        help="Workspace path (requires kind dir or worktree)")
+    cron_create.add_argument("--kanban-idempotency-key",
+        help="Custom key template; must contain {scheduled_instant} (default "
+             "'routine:{job_id}:{scheduled_instant}')")
+
     cron_edit = cron_subparsers.add_parser("edit", help="Edit an existing scheduled job")
     cron_edit.add_argument("job_id", help="Job ID to edit")
     cron_edit.add_argument("--schedule", help="New schedule")
@@ -144,6 +171,28 @@ def build_cron_parser(subparsers, *, cmd_cron: Callable) -> None:
         help="Pin this job's reasoning (thinking) effort: none, minimal, low, "
             "medium, high, xhigh, max, or ultra. Pass empty string to clear "
             "the pin and follow config resolution.")
+
+    # Kanban routine editing: --kanban-* merges over the stored block;
+    # --kanban-clear removes it (the job reverts to its own payload).
+    cron_edit.add_argument("--kanban-board", help="Set the routine's board slug")
+    cron_edit.add_argument("--kanban-title", help="Set the recurring task title")
+    cron_edit.add_argument("--kanban-body-inline",
+        help="Set the task body text (mutually exclusive with --kanban-body-file)")
+    cron_edit.add_argument("--kanban-body-file",
+        help="Set the body-file path (absolute; read at fire time)")
+    cron_edit.add_argument("--kanban-assignee", help="Set the task's assignee")
+    cron_edit.add_argument("--kanban-priority", type=int, help="Set the task priority")
+    cron_edit.add_argument("--kanban-catch-up", choices=["skip", "once", "all-bounded"],
+        help="Set the missed-occurrence policy (see cron create --kanban-catch-up)")
+    cron_edit.add_argument("--kanban-catch-up-bound", type=int,
+        help="Set the all-bounded card bound (1-20)")
+    cron_edit.add_argument("--kanban-workspace-kind", choices=["scratch", "dir", "worktree"],
+        help="Set the workspace kind for created tasks")
+    cron_edit.add_argument("--kanban-workspace-path", help="Set the workspace path")
+    cron_edit.add_argument("--kanban-idempotency-key",
+        help="Set a custom key template (must contain {scheduled_instant})")
+    _flag(cron_edit, "--kanban-clear",
+        help="Remove the kanban routine block from this job")
 
     # lifecycle actions
     cron_pause = cron_subparsers.add_parser("pause", help="Pause a scheduled job")

@@ -30,6 +30,7 @@ from pathlib import Path
 from hermes_constants import get_hermes_home
 from cron.constants import CLAIM_TTL_INACTIVITY_HEADROOM, FIRE_CLAIM_SKEW_SECONDS, FIRE_CLAIM_TTL_SECONDS
 from cron.env_settings import cron_env_setting
+from cron.kanban_routine import normalize_kanban_block, validate_kanban_job_shape
 from typing import Optional, Dict, List, Any, Callable, Set, Tuple, Union, Collection
 
 logger = logging.getLogger(__name__)
@@ -451,7 +452,7 @@ def _coerce_job_text(value: Any, fallback: str = "") -> str:
 
 
 # Fields whose presence in an update can turn a runnable job into an empty one.
-_PAYLOAD_FIELDS = frozenset({"prompt", "script", "skill", "skills", "no_agent"})
+_PAYLOAD_FIELDS = frozenset({"prompt", "script", "skill", "skills", "no_agent", "kanban"})
 
 EMPTY_PAYLOAD_ERROR = (
     "Cron job has nothing to run: the prompt is blank and no script or "
@@ -466,10 +467,13 @@ NO_AGENT_WITHOUT_SCRIPT_ERROR = (
 
 def job_payload_is_empty(job: Dict[str, Any]) -> bool:
     """True when a job record has nothing runnable (blank prompt, no script, no skills) AND at
-    least one payload field is explicitly present. ``no_agent`` already requires a script."""
+    least one payload field is explicitly present. ``no_agent`` already requires a script. A
+    ``kanban`` routine block is a payload: its occurrences materialize as tasks."""
     if _coerce_job_text(job.get("prompt")).strip() or _coerce_job_text(job.get("script")).strip():
         return False
     if _normalize_skill_list(job.get("skill"), job.get("skills")):
+        return False
+    if job.get("kanban"):
         return False
     return any(k in job for k in ("prompt", "script", "skill", "skills"))
 
@@ -1800,6 +1804,7 @@ def create_job(
     paused: bool = False,
     paused_reason: Optional[str] = None,
     pinned: bool = False,
+    kanban: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Create a new cron job and return the stored record.
 
@@ -1808,13 +1813,16 @@ def create_job(
     delivered verbatim, requires ``script``). context_from: job id(s) whose latest output is
     injected. workdir: absolute cwd for tools/scripts. monitor_script/monitor_url: cheap monitor
     source run FIRST each tick; unchanged output suppresses the agent run (mutually exclusive,
-    incompatible with ``no_agent``). reasoning_effort: per-job pin; capability NOT validated."""
+    incompatible with ``no_agent``). reasoning_effort: per-job pin; capability NOT validated.
+    kanban: routine block — each occurrence materializes as ONE kanban task instead of an
+    agent run (governance stage 6; validated by ``cron.kanban_routine``)."""
     if not isinstance(paused, bool):
         raise ValueError("paused must be a boolean.")
     if paused_reason is not None and not isinstance(paused_reason, str):
         raise ValueError("paused_reason must be a string.")
     if paused_reason is not None and not paused:
         raise ValueError("paused_reason requires paused=True.")
+    kanban_block = normalize_kanban_block(kanban)
     parsed_schedule = parse_schedule(schedule)
     # Normalize repeat: treat 0 or negative values as None (infinite). String forms
     # ('forever'/'once'/numeric) coerce via normalize_repeat_value — the shared chokepoint with update paths
@@ -1835,7 +1843,11 @@ def create_job(
 
     _validate_job_mode_invariants(f["monitor_script"], f["monitor_url"], f["no_agent"], f["script"])
     prompt_text = _coerce_job_text(prompt).strip()
-    if not prompt_text and not f["script"] and not normalized_skills:
+    validate_kanban_job_shape(
+        prompt=prompt_text, script=f["script"], no_agent=f["no_agent"],
+        monitor_script=f["monitor_script"], monitor_url=f["monitor_url"],
+        kanban=kanban_block)
+    if not prompt_text and not f["script"] and not normalized_skills and kanban_block is None:
         raise ValueError(EMPTY_PAYLOAD_ERROR)
     # Reject gateway-lifecycle commands (respawn loops) here, not just in the CLI: covers the tool.
     from cron.lifecycle_guard import check_gateway_lifecycle
@@ -1845,6 +1857,7 @@ def create_job(
         prompt_text
         or (normalized_skills[0] if normalized_skills else None)
         or (f["script"] if f["no_agent"] else None)
+        or (kanban_block or {}).get("title")
         or "cron job"
     )
     name = name or label_source[:50].strip()
@@ -1897,6 +1910,10 @@ def create_job(
     ):
         if value is not None:
             job[key] = value
+    # Kanban routine block (governance stage 6): present only when configured,
+    # so pre-feature job records stay byte-identical.
+    if kanban_block is not None:
+        job["kanban"] = kanban_block
 
     with _jobs_lock():
         save_jobs(load_jobs() + [job])
@@ -2081,6 +2098,14 @@ def update_job(job_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]
         _apply_pin_update(job, updates)
         updated = _apply_skill_fields({**job, **updates})
         _reject_terminal_activation(job, updated, job_id)
+        # Kanban routine block: dict replaces (validated), None/empty clears.
+        if "kanban" in updates:
+            kanban_value = updates["kanban"]
+            if kanban_value is None or kanban_value == {} or (
+                    isinstance(kanban_value, str) and not kanban_value.strip()):
+                updated.pop("kanban", None)
+            else:
+                updated["kanban"] = normalize_kanban_block(kanban_value)
         # Re-check on the MERGED record; scoped to changed fields so legacy records keep loading.
         if {"monitor_script", "monitor_url", "no_agent", "script"}.intersection(updates):
             _validate_job_mode_invariants(
@@ -2088,6 +2113,16 @@ def update_job(job_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]
                 updated.get("monitor_url") or None,
                 bool(updated.get("no_agent")),
                 _normalize_job_optional_text(updated.get("script")))
+        # The kanban block crosses agent-mode fields, so any payload-shaped edit
+        # re-validates the full shape (a stale persisted block must not survive
+        # an edit that makes it incoherent, and vice versa).
+        if _PAYLOAD_FIELDS.intersection(updates):
+            validate_kanban_job_shape(
+                prompt=updated.get("prompt"), script=updated.get("script"),
+                no_agent=bool(updated.get("no_agent")),
+                monitor_script=updated.get("monitor_script"),
+                monitor_url=updated.get("monitor_url"),
+                kanban=updated.get("kanban"))
         if any(k in updates for k in _PAYLOAD_FIELDS) and job_payload_is_empty(updated):
             raise ValueError(EMPTY_PAYLOAD_ERROR)
         if "schedule" in updates:

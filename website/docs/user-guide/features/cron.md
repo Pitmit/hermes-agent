@@ -333,6 +333,68 @@ cadence, or run a "cron librarian" job that reconciles the whole table
 Prefer prompts that update existing jobs (list first, then update by ID)
 over ones that create new jobs each run.
 
+## Kanban routines (cron → board, no agent run)
+
+A cron job with a `kanban` block is a **routine**: every scheduled occurrence
+materializes as exactly ONE kanban task on the given board, and the normal
+dispatcher spawns the assigned worker — no agent session is ever woken for the
+occurrence itself. The cron engine stays the only clock; there is no second
+scheduler. Routines are the deterministic way to make recurring board work
+(daily triage, weekly review, invoice checks) show up as cards.
+
+Create one with the standalone CLI (any `--kanban-*` flag enables routine mode):
+
+```bash
+hermes cron create "0 9 * * 1" \
+  --kanban-board ops --kanban-title "Weekly ops review {date}" \
+  --kanban-assignee reviewer-a --kanban-priority 120 \
+  --kanban-body-file /srv/runbooks/ops-review.md \
+  --kanban-catch-up all-bounded --kanban-catch-up-bound 5
+```
+
+The same fields are available on `hermes cron edit` (flags merge over the
+stored block; `--kanban-clear` removes it) and through the `cronjob_manage`
+tool (`kanban` property on create/update, shown in `cronjob list`). `cron list`
+shows the block as a "Kanban routine" row.
+
+Block fields:
+
+| Field | Meaning |
+|---|---|
+| `board` | Board slug the task is created on (required) |
+| `title` | Recurring task title; `{date}` becomes the occurrence's UTC date (required) |
+| `body_inline` / `body_file` | Task body — literal text, or an absolute path read at fire time (mutually exclusive) |
+| `assignee`, `priority` | Set on every created task |
+| `workspace` | `{kind: scratch\|dir\|worktree, path}` for the created tasks |
+| `catch_up` | Missed-occurrence policy: `skip`, `once` (default), or `all-bounded` |
+| `catch_up_bound` | Max cards per catch-up fire for `all-bounded` (1–20, default 5) |
+| `idempotency_key` | Custom key template; must contain `{scheduled_instant}` |
+
+Determinism guarantees:
+
+- **Exactly one card per occurrence.** The occurrence key is
+  `routine:{job_id}:{scheduled_instant}` (customizable) and dedupes through the
+  board's idempotency mechanism — a crash between card creation and response,
+  a retry, or a re-fire reads the existing card back instead of duplicating it.
+- **Catch-up is explicit.** When the scheduler was down across occurrences,
+  `skip` materializes nothing for the gap, `once` creates one catch-up card,
+  `all-bounded` walks the schedule backwards (one card per missed slot, up to
+  the bound, stopping at the first slot that already has a card) so an outage
+  can never flood the board.
+- **`no_agent` routines stay scripts.** With `--no-agent` plus a script, the
+  script IS the job (stdout delivered as usual); kanban work appears ONLY on
+  exception — a failed run creates one exception card with the script output,
+  deduped on the same occurrence key.
+- **Provenance.** Every materialized occurrence writes a `routine_occurrence`
+  event on the task (job id, scheduled instant, dispatch classification) —
+  `kanban show`/`kanban log` traces the card back to its routine.
+- **Old jobs are untouched.** Jobs without a `kanban` block behave exactly as
+  before; the block is stored only when configured.
+
+A prompt is refused on a routine (the work description belongs in
+`body_inline`/`body_file`), as are monitor sources — a routine never runs an
+agent, so there is nothing for either to gate.
+
 ## How it works
 
 **Cron execution is handled by the gateway daemon.** The gateway ticks the scheduler every 60 seconds, running any due jobs in isolated agent sessions.
