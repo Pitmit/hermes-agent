@@ -737,6 +737,9 @@ class Task:
     # VALID_BLOCK_KINDS or None (legacy); kept across unblock so a same-kind re-block reads as a loop.
     block_kind: Optional[str] = None
     block_recurrences: int = 0               # unblock-loop counter, see BLOCK_RECURRENCE_LIMIT
+    # Per-task blocked-SLA override hours (governance stage 4 blocked inbox).
+    # None = board default ``kanban.diagnostics.blocked_stale_hours`` (24).
+    block_sla_hours: Optional[float] = None
     completion_contract: Optional[str] = None
 
     @classmethod
@@ -768,6 +771,7 @@ _TASK_OPTIONAL_COLUMNS = (
     "branch_name", "project_id", "tenant", "result", "idempotency_key", "worker_pid",
     "max_runtime_seconds", "last_heartbeat_at", "current_run_id", "workflow_template_id",
     "current_step_key", "max_retries", "session_id", "completion_contract",
+    "block_sla_hours",
 )
 # Text columns where "" is stored/read as "not set".
 _TASK_EMPTY_IS_NULL_COLUMNS = (
@@ -972,7 +976,12 @@ CREATE TABLE IF NOT EXISTS tasks (
     -- ``blocked`` so a cron can't spin it forever. Reset to 0 only on a
     -- successful completion — NOT on unblock (resetting on unblock is exactly
     -- the amnesia that let the loop run unbounded).
-    block_recurrences    INTEGER NOT NULL DEFAULT 0
+    block_recurrences    INTEGER NOT NULL DEFAULT 0,
+    -- Per-task blocked-SLA override in hours (governance stage 4 blocked
+    -- inbox). NULL = board default ``kanban.diagnostics.blocked_stale_hours``.
+    -- Set/read via ``hermes kanban block-sla`` / the kanban tools; purely
+    -- advisory triage metadata — it never gates or releases anything.
+    block_sla_hours      REAL
 );
 
 CREATE TABLE IF NOT EXISTS task_links (

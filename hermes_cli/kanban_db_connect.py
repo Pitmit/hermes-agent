@@ -845,6 +845,9 @@ _LATER_TASK_COLUMNS = (
     ("block_recurrences", "block_recurrences INTEGER NOT NULL DEFAULT 0"),
     # Spawn-time start fingerprint of worker_pid (PID-reuse guard; NULL = legacy row).
     ("worker_started_at", "worker_started_at INTEGER"),
+    # Per-task blocked-SLA override hours (governance stage 4); NULL = board
+    # default ``kanban.diagnostics.blocked_stale_hours``. Advisory only.
+    ("block_sla_hours", "block_sla_hours REAL"),
 )
 
 _NOTIFY_SUB_COLUMNS = (

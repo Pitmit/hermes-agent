@@ -1898,6 +1898,16 @@ DEFAULT_CONFIG = {
         "approvals": {
             "enabled": False,
         },
+        # Blocked-inbox thresholds (governance stage 4). Both are advisory
+        # escalation thresholds for the read-only inbox projection — they never
+        # gate, release or unblock anything. ``blocked_stale_hours`` is the
+        # board-wide blocked-SLA default (a per-task override lives on
+        # tasks.block_sla_hours via ``hermes kanban block-sla``);
+        # ``approval_stale_hours`` ages pending approvals in the same ladder.
+        "diagnostics": {
+            "blocked_stale_hours": 24,
+            "approval_stale_hours": 48,
+        },
         # Profile for the root/orchestration task after Triage decomposition; "" = default profile.
         # Does not control the decomposer LLM path (see auxiliary.kanban_decomposer).
         "orchestrator_profile": "",

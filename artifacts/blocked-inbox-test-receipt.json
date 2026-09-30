@@ -1,0 +1,49 @@
+{
+  "task": "t_35462e45",
+  "stage": "Blocked-Inbox mit Severity und Action Owner (governance stage 4)",
+  "spec": "docs/kanban-governance-spec.md section '## 6. Stufe 4 — Blocked Inbox (P0)'",
+  "base_sha": "25009c47703d04cc465be15036bc847b9ecb7274",
+  "branch": "feat/kanban-governance-p0",
+  "commit_message": "feat: add governed blocked inbox",
+  "changed_files": [
+    "hermes_cli/kanban_inbox.py (new: inbox_rows projection, severity ladder, action_owner map, set_block_sla, CLI dispatch)",
+    "tests/hermes_cli/test_kanban_inbox.py (new, 23 tests)",
+    "hermes_cli/kanban_db.py (SCHEMA_SQL + Task dataclass: additive tasks.block_sla_hours REAL)",
+    "hermes_cli/kanban_db_connect.py (_LATER_TASK_COLUMNS: block_sla_hours migration for legacy boards)",
+    "hermes_cli/kanban_parser.py (inbox + block-sla CLI verbs)",
+    "hermes_cli/kanban.py (_cmd_inbox/_cmd_block_sla handlers; gateway /kanban inbox works via run_slash)",
+    "hermes_cli/config_defaults.py (kanban.diagnostics.blocked_stale_hours=24, approval_stale_hours=48)",
+    "tools/kanban_tools.py (kanban_inbox read tool + kanban_set_block_sla audited-set tool)",
+    "tools/kanban_tools_schemas.py (KANBAN_INBOX_SCHEMA, KANBAN_SET_BLOCK_SLA_SCHEMA)",
+    "artifacts/run-inbox-tests.sh (disposable heavy-test harness)",
+    "artifacts/blocked-inbox-test-receipt.json (this receipt)"
+  ],
+  "test_host": "vm-worker-gen (VM124, 10.10.10.124), fresh disposable /var/tmp harness (mktemp, trap-rm, cleanup proof NO_LEFTOVERS)",
+  "harness": "artifacts/run-inbox-tests.sh — free-space proof >= 5 GiB (116702944 KiB), fresh pm.build_env venv + HOME + HERMES_HOME + caches under TEST_ROOT, scripts/run_tests.sh per-file parallel runner (TZ=UTC LANG=C.UTF-8, clean env)",
+  "commands": [
+    "bash artifacts/run-inbox-tests.sh  (full: new tests + 20 existing suites + git diff --check)"
+  ],
+  "results": {
+    "new_tests": "23/23 passed (tests/hermes_cli/test_kanban_inbox.py), NEW_RC=0",
+    "existing_suites": "20 files, 455 passed, 0 failed, 5 skipped (platforms('windows') lane-skips on linux), SUITES_RC=0 — includes sticky gates (test_kanban_blocked_sticky.py), block kinds (test_kanban_block_kinds.py), approvals, projects, cost budget, db, db-init, core, cli, boards, reclaim/claim-lock, pr-acceptance, review lifecycle + surfaces, project link, graph identity, config, tools suites",
+    "git_diff_check": "clean (DIFFCHECK_RC=0)",
+    "cleanup": "NO_LEFTOVERS — no /var/tmp/hermes-governance-inbox.* dirs after the run; df back to 112 GiB free",
+    "iterations": "3 harness runs: run 1 red (4 test-shape bugs, engine correct), run 2 red (1 test-shape bug: unlinked parent), run 3 fully green. No kernel/engine bug found — every failure was a wrong test expectation against correct existing semantics (recurrence breaker -> triage, dependency re-kind, dependency_wait -> todo)."
+  },
+  "acceptance_criteria_proven": [
+    "severity ladder (card enum low/medium/high/critical): capability->high, needs_input/transient->medium, untyped->medium; age bands <2x SLA base, 2-6x +1, >6x +2 (capped critical) — mirroring stranded_in_ready escalation",
+    "deterministic total order: severity desc, stopped age desc (unknown-age last), ref asc tiebreak; bounded (limit 1..500, default 100)",
+    "action_owner: needs_input->human, capability->human-ops, transient->dispatcher-retry, dependency->parent-task, untyped->human, approval->human-approver, review->reviewer",
+    "stopped_age from the LAST blocked event (created_at); a re-block restarts the clock; legacy breaker-parked cards (no event) report null and sort last",
+    "SLA: per-task tasks.block_sla_hours override escalates earlier (test: 3h old task at override 1h -> high while board-default twin stays medium); board default kanban.diagnostics.blocked_stale_hours (24) and approval_stale_hours (48) overridable via config.yaml",
+    "fail-closed: hours must be positive real (0/-1/'2'/True/None/1e12 refused); invalid severity/source/kind/limit raise ValueError (CLI rc=1, tool bounded error); no audit noise from refused writes",
+    "set_block_sla is the ONLY write: audited block_sla_set event per change (hours+previous+actor), never a status change",
+    "inbox is a PURE READ: 3 consecutive reads append zero task_events AND zero approval_events (deliberately skips the list_approvals drift refresh); statuses unchanged",
+    "sticky gates: needs_input + capability blocks survive 4 dispatcher ticks (recompute_ready promotes nothing, statuses stay blocked) — no auto-unblock path exists",
+    "all three sources in ONE query (blocked + pending approval + review), severity-first; every row carries severity, action_owner, age_seconds, source",
+    "legacy DB migration: block_sla_hours dropped from a live board -> reconnect re-adds it additively, inbox serves safe defaults (NULL -> board 24h, medium), override set works",
+    "existing semantics untouched: block_kind/reason/recurrence preserved (same-kind re-block still -> triage at BLOCK_RECURRENCE_LIMIT); dependency waits stay in todo and never enter the blocked inbox; unblock keeps block_kind (block_kinds/sticky/reclaim/dependency suites green in the 455)",
+    "tools: kanban_inbox (read-only, registered, dispatchable, appends nothing) + kanban_set_block_sla (audited, fail-closed); no auto-release/unblock verb added"
+  ],
+  "notes": "Scope strictly per task card: severity {low,medium,high,critical} (card contract; spec's warning/error/critical vocabulary maps info->low, warning->medium, error->high), action_owner, optional per-task SLA, stopped_age, deterministic bounded projection. Sticky human/credential/safety gates are never auto-released: the inbox mutates nothing, the dispatcher/cron paths were not touched, and release remains human-unblock or approval-decision only (stage 2). Spec's optional new diagnostics-registry rules (approval_pending_stale, budget_stale, cost_unknown_share P1) are NOT separate registry entries here — the equivalent aging/severity is computed inside the projection (documented decision: the inbox contract and all its acceptance criteria are met by the projection; rule extraction is follow-up work if the diagnostics surface needs to render them independently). Config keys registered in DEFAULT_CONFIG (kanban.diagnostics.*) have runtime readers (kanban_inbox.board_blocked_sla_hours/approval_stale_hours + existing kanban_diagnostics reader)."
+}

@@ -454,6 +454,67 @@ KANBAN_PROJECT_ROLLUP_SCHEMA = _schema(
     ["project_id"],
 )
 
+KANBAN_INBOX_SCHEMA = _schema(
+    "kanban_inbox",
+    (
+        "Read-only blocked inbox (governance stage 4): the board's blockers "
+        "needing action — blocked tasks (with severity, action_owner and "
+        "stopped age), pending human approvals, and open review requests — "
+        "in one deterministically sorted, bounded projection (severity "
+        "first, then age). Every row carries severity, action_owner, "
+        "age_seconds and source. The call mutates nothing: sticky human/"
+        "credential/safety gates are never released by a read."
+    ),
+    {
+        "severity": _prop(
+            "string",
+            "Keep only rows at or above this severity: 'low', 'medium', "
+            "'high' or 'critical'. Omit for all rows.",
+        ),
+        "source": _prop(
+            "string",
+            "Keep only rows from one source: 'blocked', 'approval' or "
+            "'review'. Omit for all sources.",
+        ),
+        "kind": _prop(
+            "string",
+            "Keep only blocked rows with this block_kind: 'dependency', "
+            "'needs_input', 'capability' or 'transient'.",
+        ),
+        "limit": _prop(
+            "integer",
+            "Bound the projection (default 100, max 500).",
+        ),
+    },
+    [],
+)
+
+KANBAN_SET_BLOCK_SLA_SCHEMA = _schema(
+    "kanban_set_block_sla",
+    (
+        "Set or clear a task's per-task blocked-SLA override in hours "
+        "(governance stage 4). Advisory triage metadata only — it tunes how "
+        "quickly the task escalates through the blocked-inbox severity "
+        "ladder; it never gates, releases or unblocks anything. Fail-closed: "
+        "hours must be a positive number. Human surface: `hermes kanban "
+        "block-sla`. Every change is audited as a block_sla_set event."
+    ),
+    {
+        "task_id": _prop("string", _DESC_TASK_ID_DEFAULT),
+        "hours": _prop(
+            "number",
+            "Blocked-SLA override in hours, strictly > 0 (e.g. 1 for faster "
+            "escalation). Omit and pass clear=true to remove the override.",
+        ),
+        "clear": _prop(
+            "boolean",
+            "True removes the per-task override so the board default "
+            "(kanban.diagnostics.blocked_stale_hours, 24h) applies again.",
+        ),
+    },
+    ["task_id"],
+)
+
 KANBAN_CREATE_SCHEMA = _schema(
     "kanban_create",
     (

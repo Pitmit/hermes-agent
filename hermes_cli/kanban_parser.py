@@ -252,6 +252,33 @@ _PROJECT_SPECS = [
     ], help="List this board's governed projects"),
 ]
 
+# ``hermes kanban inbox`` / ``hermes kanban block-sla`` (governance stage 4:
+# blocked inbox). Both are additive surfaces; the inbox is a pure read
+# (severity-sorted projection over blocked tasks, pending approvals and open
+# reviews) and never mutates anything — sticky human/credential/safety gates
+# are released only by a human unblock or an approval decision.
+_INBOX_SPECS = [
+    _cmd("inbox", [
+        _arg("--severity", choices=("low", "medium", "high", "critical"),
+             help="Only rows at or above this severity"),
+        _arg("--source", choices=("blocked", "approval", "review"),
+             help="Only rows from this source"),
+        _arg("--kind", choices=("dependency", "needs_input", "capability", "transient"),
+             help="Only blocked rows with this block_kind"),
+        _arg("--limit", type=int,
+             help=f"Bound the projection (default 100, max 500)"),
+        _json_flag(help="Emit the projection as JSON"),
+    ], help="Blocked inbox: severity/age-sorted blockers needing action (read-only)"),
+    _cmd("block-sla", [
+        _TASK_ID,
+        _arg("--hours", type=float,
+             help="Per-task blocked-SLA override in hours (> 0). Without --hours/--clear: show"),
+        _arg("--clear", action="store_true",
+             help="Remove the per-task override (board default applies again)"),
+        _json_flag(help="Emit the result as JSON"),
+    ], help="Set/show/clear a task's blocked-SLA override (advisory triage metadata)"),
+]
+
 # Top-level ``hermes kanban <action>`` records, in ``--help`` order.
 _SPECS = [
     _cmd("init", help="Create kanban.db if missing (idempotent)"),
@@ -533,6 +560,8 @@ _SPECS = [
          help="Generic human approvals: request/list/show/approve/reject/revise (workers ask, only humans decide)"),
     _cmd("project", children=("project_action", _PROJECT_SPECS),
          help="Project goals + rollups: goal/rollup/list (workers read, only humans set)"),
+    # Governance stage 4: read-only blocked inbox + per-task SLA override.
+    *_INBOX_SPECS,
     _cmd("assignees", [_json_flag()],
          help="List known profiles + per-profile task counts (union of ~/.hermes/profiles/ and current assignees on the board)"),
     _cmd("context", [_TASK_ID],

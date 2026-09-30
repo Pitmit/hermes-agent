@@ -23,8 +23,10 @@ from tools.kanban_tools_schemas import (
     KANBAN_APPROVAL_REQUEST_SCHEMA,
     KANBAN_ATTACH_SCHEMA,
     KANBAN_ATTACH_URL_SCHEMA, KANBAN_ATTACHMENTS_SCHEMA, KANBAN_BLOCK_SCHEMA, KANBAN_BUDGET_SHOW_SCHEMA,
-    KANBAN_COMMENT_SCHEMA, KANBAN_COMPLETE_SCHEMA, KANBAN_CREATE_SCHEMA, KANBAN_HEARTBEAT_SCHEMA, KANBAN_LINK_SCHEMA,
-    KANBAN_LIST_SCHEMA, KANBAN_PROJECT_ROLLUP_SCHEMA, KANBAN_REQUEST_CHANGES_SCHEMA, KANBAN_REQUEST_REVIEW_SCHEMA,
+    KANBAN_COMMENT_SCHEMA, KANBAN_COMPLETE_SCHEMA, KANBAN_CREATE_SCHEMA, KANBAN_HEARTBEAT_SCHEMA,
+    KANBAN_INBOX_SCHEMA, KANBAN_LINK_SCHEMA,
+    KANBAN_LIST_SCHEMA, KANBAN_PROJECT_ROLLUP_SCHEMA, KANBAN_REQUEST_CHANGES_SCHEMA,
+    KANBAN_REQUEST_REVIEW_SCHEMA, KANBAN_SET_BLOCK_SLA_SCHEMA,
     KANBAN_SHOW_SCHEMA, KANBAN_UNBLOCK_SCHEMA)
 
 logger = logging.getLogger(__name__)
@@ -1425,6 +1427,59 @@ def _handle_project_rollup(args: dict, **kw) -> str:
         return _ok(**rollup)
 
 
+@_kanban_handler("kanban_inbox")
+def _handle_inbox(args: dict, **kw) -> str:
+    """Read-only blocked inbox (governance stage 4).
+
+    A pure projection over blocked tasks, pending approvals and open reviews —
+    the call appends no events and touches no statuses, so sticky
+    human/credential/safety gates are never released by a read. Board
+    isolation: reads the board this call resolves to (no board override for
+    task workers on purpose — same rule as the rollup).
+    """
+    with _board(None if kw.get("task_id") else args.get("board")) as (kb, conn):
+        from hermes_cli import kanban_inbox as _ki
+
+        try:
+            rows = _ki.inbox_rows(
+                conn,
+                board=kb.get_current_board() or kb.DEFAULT_BOARD,
+                severity=args.get("severity") or None,
+                source=args.get("source") or None,
+                block_kind=args.get("kind") or None,
+                limit=(int(args["limit"]) if args.get("limit") is not None
+                       else _ki.INBOX_DEFAULT_LIMIT),
+            )
+        except ValueError as exc:
+            return tool_error(f"kanban_inbox: {exc}")
+        return _ok(count=len(rows), rows=rows)
+
+
+@_kanban_handler("kanban_set_block_sla")
+def _handle_set_block_sla(args: dict, **kw) -> str:
+    """Set/clear a task's blocked-SLA override (governance stage 4).
+
+    Advisory triage metadata only — never a gate, never an unblock; every
+    change lands as an audited ``block_sla_set`` event so a human can see who
+    moved the SLA. Fail-closed on invalid hours.
+    """
+    task_id = args.get("task_id") or kw.get("task_id")
+    if not task_id:
+        return tool_error("kanban_set_block_sla: task_id is required")
+    hours = args.get("hours")
+    clear = bool(args.get("clear"))
+    if hours is None and not clear:
+        return tool_error("kanban_set_block_sla: pass hours (> 0) or clear=true")
+    with _board(None) as (kb, conn):
+        from hermes_cli import kanban_inbox as _ki
+
+        try:
+            result = _ki.set_block_sla(conn, task_id, hours, clear=clear)
+        except (ValueError, LookupError) as exc:
+            return tool_error(f"kanban_set_block_sla: {exc}")
+        return _ok(**result)
+
+
 # --- Registration (order preserved: it is the order tools appear in the schema) ---
 
 # kanban_list / kanban_unblock route the board and are hidden from task workers;
@@ -1451,6 +1506,8 @@ _TOOLS = (
     ("kanban_budget_show", KANBAN_BUDGET_SHOW_SCHEMA, _handle_budget_show, "💰"),
     ("kanban_approval_request", KANBAN_APPROVAL_REQUEST_SCHEMA, _handle_approval_request, "✋"),
     ("kanban_project_rollup", KANBAN_PROJECT_ROLLUP_SCHEMA, _handle_project_rollup, "📁"),
+    ("kanban_inbox", KANBAN_INBOX_SCHEMA, _handle_inbox, "📥"),
+    ("kanban_set_block_sla", KANBAN_SET_BLOCK_SLA_SCHEMA, _handle_set_block_sla, "⏱"),
     ("kanban_link", KANBAN_LINK_SCHEMA, _handle_link, "🔗"))
 
 for _name, _sch, _handler, _emoji in _TOOLS:

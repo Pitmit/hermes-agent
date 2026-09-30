@@ -1355,6 +1355,30 @@ def _cmd_project(args: argparse.Namespace) -> int:
     return dispatch_project(args)
 
 
+def _cmd_inbox(args: argparse.Namespace) -> int:
+    """``hermes kanban inbox`` — the read-only blocked inbox (governance stage 4).
+
+    A pure read: severity/age-sorted projection over blocked tasks, pending
+    approvals and open review requests. It never mutates — sticky
+    human/credential/safety gates are released only by a human unblock or an
+    approval decision, never by a read (or by the dispatcher/cron).
+    """
+    from hermes_cli.kanban_inbox import dispatch_inbox
+
+    return dispatch_inbox(args)
+
+
+def _cmd_block_sla(args: argparse.Namespace) -> int:
+    """``hermes kanban block-sla <task_id>`` — per-task blocked-SLA override.
+
+    Advisory triage metadata (escalates the task earlier/later in the inbox);
+    it never gates or releases anything.
+    """
+    from hermes_cli.kanban_inbox import dispatch_block_sla
+
+    return dispatch_block_sla(args)
+
+
 _HANDLERS = {
     "init": _cmd_init, "create": _cmd_create, "swarm": _cmd_swarm,
     "list": _cmd_list, "ls": _cmd_list, "show": _cmd_show,
@@ -1375,7 +1399,7 @@ _HANDLERS = {
     "notify-list": _cmd_notify_list, "notify-unsubscribe": _cmd_notify_unsubscribe,
     "context": _cmd_context, "specify": _cmd_specify, "decompose": _cmd_decompose,
     "gc": _cmd_gc, "budget": _cmd_budget, "approval": _cmd_approval,
-    "project": _cmd_project,
+    "project": _cmd_project, "inbox": _cmd_inbox, "block-sla": _cmd_block_sla,
 }
 
 
