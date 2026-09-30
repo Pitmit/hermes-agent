@@ -1171,7 +1171,37 @@ CREATE TABLE IF NOT EXISTS approval_events (
     payload      TEXT,
     created_at   INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_approval_events_approval ON approval_events(approval_id, id);"""
+CREATE INDEX IF NOT EXISTS idx_approval_events_approval ON approval_events(approval_id, id);
+
+-- Project governance (governance stage 3): goal / owner / budget metadata for
+-- the EXISTING tasks.project_id (worktree anchor, _resolve_project_link).
+-- Board-first: the shared board DB is the governance layer; the per-profile
+-- projects.db stays the registry and is never written by this feature.
+-- Rollups are a pure SQL read projection (kanban_projects.project_rollup) —
+-- no materialised cache, no goal engine. PK (board, project_id): each board
+-- governs its own row. tenant: soft-namespace stamp the human bound the goal
+-- to (NULL = board-wide); validated fail-closed against the project's
+-- board-side task tenants at write time. status: 'active'|'achieved'|
+-- 'abandoned' — a contract field, not a lifecycle machine.
+CREATE TABLE IF NOT EXISTS kanban_project_goals (
+    board             TEXT NOT NULL,
+    project_id        TEXT NOT NULL,
+    goal              TEXT,
+    owner             TEXT,
+    monthly_budget_usd REAL,
+    tenant            TEXT,
+    status            TEXT NOT NULL DEFAULT 'active',
+    created_by        TEXT NOT NULL,
+    created_at        INTEGER NOT NULL,
+    updated_at        INTEGER NOT NULL,
+    PRIMARY KEY (board, project_id)
+);
+
+-- NOTE: idx_tasks_project lives in _migrate_add_optional_columns
+-- (kanban_db_connect.py), never here — executescript parses against the live
+-- schema, so an index over the additive tasks.project_id column would abort
+-- init on legacy boards before the ALTER TABLE pass runs (same rule as
+-- idx_tasks_tenant / idx_tasks_session_id)."""
 
 
 # --- ID generation ---

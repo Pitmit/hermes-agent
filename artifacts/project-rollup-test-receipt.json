@@ -1,0 +1,56 @@
+{
+  "task": "t_644132f9",
+  "stage": "Project-Metadaten und Rollups (governance stage 3)",
+  "spec": "docs/kanban-governance-spec.md section '## 5. Stufe 3 — Projects/Goals: project_id aktivieren (P0)'",
+  "base_sha": "f1e5e689eebe79325f60e48bfa2ca7c53aeeb5ba",
+  "branch": "feat/kanban-governance-p0",
+  "commit_message": "feat: activate kanban project rollups",
+  "changed_files": [
+    "hermes_cli/kanban_projects.py (new, 602 lines: reference validation, goal CRUD, read-only rollup, CLI dispatch)",
+    "tests/hermes_cli/test_kanban_projects.py (new, 648 lines, 19 tests)",
+    "hermes_cli/kanban.py (dispatch wiring: 'project' -> _cmd_project)",
+    "hermes_cli/kanban_db.py (SCHEMA_SQL: kanban_project_goals table; index comment pointing at migration pass)",
+    "hermes_cli/kanban_db_connect.py (idx_tasks_project in _migrate_add_optional_columns)",
+    "hermes_cli/kanban_parser.py (_PROJECT_SPECS: goal|rollup|list)",
+    "tools/kanban_tools.py (kanban_project_rollup read-only worker tool)",
+    "tools/kanban_tools_schemas.py (KANBAN_PROJECT_ROLLUP_SCHEMA)",
+    "artifacts/run-project-tests.sh (disposable heavy-test harness)",
+    "artifacts/e2e_cli_check.py (real slash-parser E2E probe)",
+    "artifacts/project-rollup-test-receipt.json (this receipt)"
+  ],
+  "test_host": "vm-worker-gen (VM124, 10.10.10.124), fresh disposable /var/tmp harness (mktemp, trap-rm, cleanup proof NO_LEFTOVERS)",
+  "harness": "artifacts/run-project-tests.sh — free-space proof >= 5 GiB (116703276 KiB), fresh pm.build_env venv + HOME + HERMES_HOME + caches under TEST_ROOT, scripts/run_tests.sh per-file parallel runner (TZ=UTC LANG=C.UTF-8, clean env)",
+  "commands": [
+    "bash artifacts/run-project-tests.sh  (full: new tests + 29 existing suites + git diff --check + projects_db.py untouched)",
+    "python artifacts/e2e_cli_check.py  (real kanban.run_slash parser: goal set/show, rollup, list, unknown-ref refusal, worker-context write refusal)"
+  ],
+  "results": {
+    "new_tests": "19/19 passed (tests/hermes_cli/test_kanban_projects.py), NEW_RC=0",
+    "existing_suites": "29 files, 506 passed, 0 failed, 5 skipped (platforms('windows') lane-skips on linux), SUITES_RC=0 — includes the untouched approval engine (test_kanban_approvals.py), cost budget (test_kanban_cost_budget.py), project link, board project, review lifecycle, dispatch, tools, toolset-opt-in suites",
+    "e2e_cli": "E2E_RC=0 — real argparse tree: goal set (text/owner/budget 15), goal show, rollup (costs 2026-09, budget $0.00 of $15.00 state ok), unknown project refused fail-closed, bare 'project' defaults to list",
+    "git_diff_check": "clean (DIFFCHECK_RC=0)",
+    "projects_db_untouched": "PROJECTSDB_RC=0 (registry never written by this feature)",
+    "cleanup": "NO_LEFTOVERS — no /var/tmp/hermes-governance-* or kp-e2e-* dirs after runs",
+    "free_space_recovered": "FREE_BEFORE_KB=116703276 -> FREE_AFTER_KB=115937748 during run; post-cleanup verified by NO_LEFTOVERS + df"
+  },
+  "kernel_bug_found_and_fixed": "First full harness run failed 2 legacy-DB tests (test_connect_migrates_legacy_db_before_optional_column_indexes, test_connect_heals_reduced_tasks_schema_seeded_by_external_harness) with sqlite3.OperationalError 'no such column: project_id': the new idx_tasks_project had been added to SCHEMA_SQL, but executescript parses each statement against the live schema, so the index over the additive tasks.project_id column aborted init on legacy boards before the ALTER TABLE pass. Fix: index moved out of SCHEMA_SQL into _migrate_add_optional_columns (kanban_db_connect.py) — the rule the migration itself documents for idx_tasks_tenant/idx_tasks_session_id. Fix proven targeted (both failing files green, NO_LEFTOVERS), then the COMPLETE harness re-run green.",
+  "reproof": "second full harness run on the fixed kernel: all green (506 existing + 19 new + E2E)",
+  "acceptance_criteria_proven": [
+    "unknown_project_reference_rejected_on_write_and_read (registry + board unknown -> ProjectReferenceError, CLI rc=1, tool error surfaced)",
+    "foreign_board_reference_rejected (registry project bound to another board_slug -> ProjectReferenceError)",
+    "foreign_tenant_reference_rejected (tenant outside the project's board-side task tenants -> ProjectReferenceError)",
+    "slug_reference_canonicalises_to_registry_id and board_side_only_project_accepted (registry-or-board-first resolution, no live install)",
+    "tasks_without_project_stay_valid_and_ungoverned (existing project-less tasks keep working; no forced project)",
+    "rollup_counts_match_direct_sql_recount and cli_rollup_json_equals_direct_sql (rollup == independent SQL recount: statuses, open/blocked, progress ratio)",
+    "unknown_costs_honest (ledger row cost_status='unknown' never adds 0 to MTD; surfaced as unknown_runs==1)",
+    "rollup_statement_count_is_bounded (fixed statement budget, no N+1, no per-task loop)",
+    "rollup_budget_utilisation and budget_coupling_writes_exactly_one_row (goal --budget couples exactly one kanban_budgets row through the single budget write path; 0 removes it)",
+    "board_isolation_of_goal_rows (PK (board, project_id); one board never sees another's goal rows)",
+    "worker_context_cannot_set_goals (HERMES_KANBAN_TASK set -> PermissionError rc=2; workers can never self-govern)",
+    "toolset_has_rollup_read_only_and_no_goal_set_tool and rollup_tool_handler_dispatch (worker surface is kanban_project_rollup ONLY, registered and dispatchable, no board override param)",
+    "legacy_db_creates_project_tables_and_serves (old DB gains kanban_project_goals + idx_tasks_project additively, idempotent; incl. the two healed-legacy tests in test_kanban_db.py after the SCHEMA_SQL fix)",
+    "approval_engine_untouched (test_kanban_approvals.py + review/dispatch/sticky/unblock suites green within the 506)",
+    "no_separate_goal_engine (rollup is a pure SQL read projection; status is a contract field active|achieved|abandoned, no lifecycle machine)"
+  ],
+  "notes": "Board-first governance: the shared board DB holds goal rows (kanban_project_goals, PK board+project_id) and rollups; the per-profile projects.db stays a read-through registry (never written). Tenant is a validated-at-write, soft-filtered-at-read namespace, not an isolation wall. Budget writes go through hermes_cli.kanban_cost set_budget/remove_budget (the one budget write path) AFTER the goal-row commit — both sides idempotent, crash between them self-heals on next call. No N+1: every rollup number comes from one aggregate SQL statement over idx_tasks_project. Worker runs (run 157) exhausted its 100-iteration budget mid-harness; run 158 re-verified everything from scratch, found and fixed the SCHEMA_SQL index bug, and re-proved the full matrix green."
+}

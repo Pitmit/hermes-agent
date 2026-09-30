@@ -1341,6 +1341,20 @@ def _cmd_approval(args: argparse.Namespace) -> int:
     return dispatch_approval(args)
 
 
+def _cmd_project(args: argparse.Namespace) -> int:
+    """``hermes kanban project goal|rollup|list`` — the human project-governance
+    surface (governance stage 3).
+
+    Delegates to :func:`hermes_cli.kanban_projects.dispatch_project`. Goal and
+    budget writes fail closed in dispatched-worker contexts (no worker
+    self-governance); the worker toolset has the read-only
+    ``kanban_project_rollup`` only.
+    """
+    from hermes_cli.kanban_projects import dispatch_project
+
+    return dispatch_project(args)
+
+
 _HANDLERS = {
     "init": _cmd_init, "create": _cmd_create, "swarm": _cmd_swarm,
     "list": _cmd_list, "ls": _cmd_list, "show": _cmd_show,
@@ -1361,6 +1375,7 @@ _HANDLERS = {
     "notify-list": _cmd_notify_list, "notify-unsubscribe": _cmd_notify_unsubscribe,
     "context": _cmd_context, "specify": _cmd_specify, "decompose": _cmd_decompose,
     "gc": _cmd_gc, "budget": _cmd_budget, "approval": _cmd_approval,
+    "project": _cmd_project,
 }
 
 

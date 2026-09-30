@@ -23,9 +23,8 @@ from tools.kanban_tools_schemas import (
     KANBAN_APPROVAL_REQUEST_SCHEMA,
     KANBAN_ATTACH_SCHEMA,
     KANBAN_ATTACH_URL_SCHEMA, KANBAN_ATTACHMENTS_SCHEMA, KANBAN_BLOCK_SCHEMA, KANBAN_BUDGET_SHOW_SCHEMA,
-    KANBAN_COMMENT_SCHEMA,
-    KANBAN_COMPLETE_SCHEMA, KANBAN_CREATE_SCHEMA, KANBAN_HEARTBEAT_SCHEMA, KANBAN_LINK_SCHEMA,
-    KANBAN_LIST_SCHEMA, KANBAN_REQUEST_CHANGES_SCHEMA, KANBAN_REQUEST_REVIEW_SCHEMA,
+    KANBAN_COMMENT_SCHEMA, KANBAN_COMPLETE_SCHEMA, KANBAN_CREATE_SCHEMA, KANBAN_HEARTBEAT_SCHEMA, KANBAN_LINK_SCHEMA,
+    KANBAN_LIST_SCHEMA, KANBAN_PROJECT_ROLLUP_SCHEMA, KANBAN_REQUEST_CHANGES_SCHEMA, KANBAN_REQUEST_REVIEW_SCHEMA,
     KANBAN_SHOW_SCHEMA, KANBAN_UNBLOCK_SCHEMA)
 
 logger = logging.getLogger(__name__)
@@ -1403,6 +1402,29 @@ def _handle_approval_request(args: dict, **kw) -> str:
         return _ok(**result)
 
 
+@_kanban_handler("kanban_project_rollup")
+def _handle_project_rollup(args: dict, **kw) -> str:
+    """Read-only rollup of one kanban project (governance stage 3).
+
+    Workers may read rollups, never set goals or budgets (no
+    self-governance): the goal surface is the human CLI
+    ``hermes kanban project goal``, and the kernel refuses dispatched worker
+    contexts on writes. Board isolation: the rollup reads the board this
+    call resolves to (no board override parameter on purpose).
+    """
+    with _board(None) as (kb, conn):
+        from hermes_cli import kanban_projects as _kp
+
+        rollup = _kp.project_rollup(
+            conn,
+            board=kb.get_current_board() or kb.DEFAULT_BOARD,
+            project_id=args["project_id"],
+            tenant=args.get("tenant") or None,
+            period=args.get("period") or None,
+        )
+        return _ok(**rollup)
+
+
 # --- Registration (order preserved: it is the order tools appear in the schema) ---
 
 # kanban_list / kanban_unblock route the board and are hidden from task workers;
@@ -1428,6 +1450,7 @@ _TOOLS = (
     ("kanban_unblock", KANBAN_UNBLOCK_SCHEMA, _handle_unblock, "▶"),
     ("kanban_budget_show", KANBAN_BUDGET_SHOW_SCHEMA, _handle_budget_show, "💰"),
     ("kanban_approval_request", KANBAN_APPROVAL_REQUEST_SCHEMA, _handle_approval_request, "✋"),
+    ("kanban_project_rollup", KANBAN_PROJECT_ROLLUP_SCHEMA, _handle_project_rollup, "📁"),
     ("kanban_link", KANBAN_LINK_SCHEMA, _handle_link, "🔗"))
 
 for _name, _sch, _handler, _emoji in _TOOLS:

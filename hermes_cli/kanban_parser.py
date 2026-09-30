@@ -220,6 +220,38 @@ _APPROVAL_SPECS = [
     ], help="Ask for revision (keeps the request open)"),
 ]
 
+# ``hermes kanban project <action>`` records (governance stage 3: goals and
+# rollups over the EXISTING tasks.project_id). Goal/budget writes are the
+# HUMAN surface — workers read rollups via the kanban_project_rollup tool and
+# can never set goals/budgets (no self-governance).
+_PROJECT_SPECS = [
+    _cmd("goal", [
+        _arg("project_id",
+             help="Project id or slug (must be known to the projects registry or this board)"),
+        _arg("--text",
+             help="Goal text (the project's contract). Without any set flag: show. "
+                  "Pass '' to clear"),
+        _arg("--owner", help="Responsible profile. Omit = unchanged, '' = clear"),
+        _arg("--budget", type=float,
+             help="Monthly budget in USD (recurring, scope 'project'). 0 removes the budget row"),
+        _arg("--tenant",
+             help="Bind the goal to one tenant namespace (validated against the project's "
+                  "board-side tasks; '' clears)"),
+        _arg("--status", choices=("active", "achieved", "abandoned"),
+             help="Goal status (a contract field, not a lifecycle machine)"),
+        _json_flag(help="Emit the goal row as JSON"),
+    ], help="Set/show the project's goal, owner, tenant and monthly budget"),
+    _cmd("rollup", [
+        _arg("project_id", help="Project id or slug"),
+        _arg("--tenant", help="Restrict the rollup to one tenant namespace"),
+        _arg("--period", help="Cost month 'YYYY-MM' (UTC; default: current month)"),
+        _json_flag(help="Emit the rollup as JSON"),
+    ], help="Read-only rollup: task statuses, progress, costs, budget, goal"),
+    _cmd("list", [
+        _json_flag(help="Emit one JSON array"),
+    ], help="List this board's governed projects"),
+]
+
 # Top-level ``hermes kanban <action>`` records, in ``--help`` order.
 _SPECS = [
     _cmd("init", help="Create kanban.db if missing (idempotent)"),
@@ -499,6 +531,8 @@ _SPECS = [
          help="Monthly cost budgets: set/show/rm (workers see, only humans set)"),
     _cmd("approval", children=("approval_action", _APPROVAL_SPECS),
          help="Generic human approvals: request/list/show/approve/reject/revise (workers ask, only humans decide)"),
+    _cmd("project", children=("project_action", _PROJECT_SPECS),
+         help="Project goals + rollups: goal/rollup/list (workers read, only humans set)"),
     _cmd("assignees", [_json_flag()],
          help="List known profiles + per-profile task counts (union of ~/.hermes/profiles/ and current assignees on the board)"),
     _cmd("context", [_TASK_ID],

@@ -424,6 +424,36 @@ KANBAN_APPROVAL_REQUEST_SCHEMA = _schema(
     ["type", "subject_kind", "subject_ref"],
 )
 
+KANBAN_PROJECT_ROLLUP_SCHEMA = _schema(
+    "kanban_project_rollup",
+    (
+        "Read-only rollup of one kanban project: task counts per status, "
+        "open/blocked counts, progress, the month-to-date KNOWN cost of the "
+        "project's runs (runs without a measured cost are reported as "
+        "unknown_runs — honest, never 0), the governing project budget, and "
+        "the project's goal/owner. Workers may read rollups, never set goals "
+        "or budgets: those are managed by the human via `hermes kanban "
+        "project goal`."
+    ),
+    {
+        "project_id": _prop(
+            "string",
+            "Project id or slug. Must be known to this board (a task "
+            "reference or an existing goal row) or to the projects registry.",
+        ),
+        "tenant": _prop(
+            "string",
+            "Restrict the rollup to one tenant namespace (soft filter; "
+            "default: all tenants of the project).",
+        ),
+        "period": _prop(
+            "string",
+            "Cost month 'YYYY-MM' (UTC). Defaults to the current month.",
+        ),
+    },
+    ["project_id"],
+)
+
 KANBAN_CREATE_SCHEMA = _schema(
     "kanban_create",
     (
