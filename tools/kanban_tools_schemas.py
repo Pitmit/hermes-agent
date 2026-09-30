@@ -515,6 +515,95 @@ KANBAN_SET_BLOCK_SLA_SCHEMA = _schema(
     ["task_id"],
 )
 
+KANBAN_WATCHDOG_SHOW_SCHEMA = _schema(
+    "kanban_watchdog_show",
+    (
+        "Read-only view of the task-bound independent watchdogs "
+        "(governance stage 5): one active independent, NON-repairing "
+        "reviewer per task, fired exactly once per distinct stopped-state "
+        "fingerprint (review handoffs and blocks). Returns the watchdog "
+        "rows (reviewer, instructions, escalation state) and their firing "
+        "ledger. The watchdog's decision vocabulary is exactly "
+        "accept/request_changes/reopen/reassign — it never repairs and "
+        "never opens a human gate."
+    ),
+    {
+        "task_id": _prop(
+            "string",
+            "Only this task's watchdog and firings. Omit for the whole "
+            "board (an independent reviewer finds its pending firings "
+            "here).",
+        ),
+        "pending": _prop(
+            "boolean",
+            "True = only firings still awaiting the reviewer's verdict.",
+        ),
+    },
+    [],
+)
+
+KANBAN_WATCHDOG_CREATE_SCHEMA = _schema(
+    "kanban_watchdog_create",
+    (
+        "Attach a task-bound independent watchdog to a task (governance "
+        "stage 5): when the task stops (review handoff or block), an "
+        "independent reviewer profile is fired exactly once per distinct "
+        "stopped state. The reviewer must differ from the task's own "
+        "assignee/implementer (no self-review) and the watchdog NEVER "
+        "repairs — its only decision verbs are "
+        "accept/request_changes/reopen/reassign."
+    ),
+    {
+        "task_id": _prop("string", "The task to watch (must exist)."),
+        "reviewer": _prop(
+            "string",
+            "Independent reviewer profile. Must NOT be the task's own "
+            "assignee or implementer — the check is independent by "
+            "construction.",
+        ),
+        "instructions": _prop(
+            "string",
+            "One or two sentences: what the reviewer verifies on each "
+            "stop (the reviewer-facing check contract).",
+        ),
+    },
+    ["task_id", "reviewer"],
+)
+
+KANBAN_WATCHDOG_DECIDE_SCHEMA = _schema(
+    "kanban_watchdog_decide",
+    (
+        "Apply the independent reviewer's verdict to the latest open "
+        "watchdog firing (governance stage 5). RESERVED for the "
+        "watchdog's own reviewer profile — no other worker may decide. "
+        "Exactly one decision per firing; the vocabulary is closed: "
+        "accept | request_changes | reopen | reassign. The watchdog "
+        "never repairs: there is no fix/complete verb, and reopen "
+        "refuses human gates (needs_input/capability blocks open only "
+        "by a human)."
+    ),
+    {
+        "watchdog_id": _prop("string", "Watchdog id (wd_...)."),
+        "verb": _prop(
+            "string",
+            "The verdict: 'accept' (stopped state stands, no mutation), "
+            "'request_changes' (review stops: route back to the "
+            "implementer), 'reopen' (review stops or transient blocks: "
+            "back to work), or 'reassign' (hand the task to another "
+            "assignee).",
+        ),
+        "note": _prop(
+            "string",
+            "One or two sentences for the audit trail: why this verdict.",
+        ),
+        "assignee": _prop(
+            "string",
+            "New assignee profile (required for verb 'reassign').",
+        ),
+    },
+    ["watchdog_id", "verb"],
+)
+
 KANBAN_CREATE_SCHEMA = _schema(
     "kanban_create",
     (

@@ -1182,6 +1182,62 @@ CREATE TABLE IF NOT EXISTS approval_events (
 );
 CREATE INDEX IF NOT EXISTS idx_approval_events_approval ON approval_events(approval_id, id);
 
+-- Task-bound independent watchdog (governance stage 5): ONE active
+-- independent, NON-repairing reviewer per task, watching the task's
+-- stopped states (review handoffs and blocks). reviewer/instructions
+-- record who checks and what they check; the stopped-state fingerprint is
+-- ALWAYS computed server-side (kanban_watchdog.stopped_state_fingerprint)
+-- and the watchdog fires exactly once per distinct fingerprint
+-- (task_watchdog_firings). The watchdog may only trigger
+-- accept/request_changes/reopen/reassign — never a repair, never an
+-- automated release of a human gate. escalated_at marks the sticky human
+-- escalation after WATCHDOG_ROUND_LIMIT unchanged rounds; while set, the
+-- watchdog stays silent until a human removes it.
+CREATE TABLE IF NOT EXISTS task_watchdogs (
+    id           TEXT PRIMARY KEY,          -- 'wd_<hex>'
+    board        TEXT NOT NULL,
+    tenant       TEXT,
+    task_id      TEXT NOT NULL,
+    reviewer     TEXT NOT NULL,             -- independent reviewer profile (never the task's own)
+    instructions TEXT,                      -- reviewer-facing check contract
+    created_by   TEXT NOT NULL,
+    created_at   INTEGER NOT NULL,
+    updated_at   INTEGER NOT NULL,
+    status       TEXT NOT NULL DEFAULT 'active',   -- 'active' | 'retired'
+    escalated_at INTEGER                    -- NULL = not escalated; sticky once set
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_task_watchdogs_active
+    ON task_watchdogs(board, task_id) WHERE status = 'active';
+
+-- Exactly-once firing ledger (governance stage 5): one row per
+-- (watchdog, stopped-state fingerprint). A firing is created when the
+-- watched task first stops with that fingerprint; every later stop with
+-- the SAME fingerprint only bumps rounds (capped by
+-- WATCHDOG_ROUND_LIMIT -> sticky human escalation). outcome stays NULL
+-- until the reviewer decides; the decision binds exactly once and is
+-- fingerprinted (outcome_fingerprint) for the audit trail.
+CREATE TABLE IF NOT EXISTS task_watchdog_firings (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    watchdog_id   TEXT NOT NULL,
+    task_id       TEXT NOT NULL,
+    board         TEXT NOT NULL,
+    fingerprint   TEXT NOT NULL,
+    stop_kind     TEXT NOT NULL,           -- 'review' | 'blocked'
+    stop_event_id INTEGER NOT NULL,        -- last counted stop event (round dedupe)
+    rounds        INTEGER NOT NULL DEFAULT 1,
+    fired_at      INTEGER NOT NULL,
+    outcome       TEXT,                    -- 'accepted'|'changes_requested'|'reopened'|'reassigned'
+    outcome_fingerprint TEXT,
+    decided_by    TEXT,
+    decided_at    INTEGER,
+    decided_via   TEXT,
+    decision_note TEXT,
+    updated_at    INTEGER NOT NULL,
+    UNIQUE (watchdog_id, fingerprint)
+);
+CREATE INDEX IF NOT EXISTS idx_task_watchdog_firings_task
+    ON task_watchdog_firings(board, task_id, id);
+
 -- Project governance (governance stage 3): goal / owner / budget metadata for
 -- the EXISTING tasks.project_id (worktree anchor, _resolve_project_link).
 -- Board-first: the shared board DB is the governance layer; the per-profile

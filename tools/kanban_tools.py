@@ -27,7 +27,9 @@ from tools.kanban_tools_schemas import (
     KANBAN_INBOX_SCHEMA, KANBAN_LINK_SCHEMA,
     KANBAN_LIST_SCHEMA, KANBAN_PROJECT_ROLLUP_SCHEMA, KANBAN_REQUEST_CHANGES_SCHEMA,
     KANBAN_REQUEST_REVIEW_SCHEMA, KANBAN_SET_BLOCK_SLA_SCHEMA,
-    KANBAN_SHOW_SCHEMA, KANBAN_UNBLOCK_SCHEMA)
+    KANBAN_SHOW_SCHEMA, KANBAN_UNBLOCK_SCHEMA,
+    KANBAN_WATCHDOG_SHOW_SCHEMA, KANBAN_WATCHDOG_CREATE_SCHEMA,
+    KANBAN_WATCHDOG_DECIDE_SCHEMA)
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +121,25 @@ def _check_kanban_approvals_mode() -> bool:
         from hermes_cli.kanban_approvals import approvals_enabled
 
         return approvals_enabled()
+    except Exception:
+        return False
+
+
+@no_cache_check_fn
+def _check_kanban_watchdog_mode() -> bool:
+    """Watchdog tools: gated on ``kanban.watchdog.enabled`` (default off).
+
+    Reading/creating/deciding is worker-legal within the kernel fences (the
+    decide path is reserved for the watchdog's own reviewer profile and the
+    vocabulary never repairs). The flag arms the worker surface; the human
+    CLI surface works either way.
+    """
+    if not _visible(to_env_worker=True):
+        return False
+    try:
+        from hermes_cli.kanban_watchdog import watchdog_enabled
+
+        return watchdog_enabled()
     except Exception:
         return False
 
@@ -691,6 +712,18 @@ def _handle_show(args: dict, **kw) -> str:
                 payload["approval"] = hint
         except Exception:
             logger.debug("approval hint for %s failed (read-only, fail-open)", tid, exc_info=True)
+        # Watchdog hint (governance stage 5): a watched task carries its
+        # watchdog + latest firing state so the worker sees who independently
+        # reviews its stops.
+        try:
+            from hermes_cli import kanban_watchdog as _kw
+
+            wd_hint = _kw.watchdog_hint_for_task(
+                conn, kb.get_current_board() or kb.DEFAULT_BOARD, tid)
+            if wd_hint is not None:
+                payload["watchdog"] = wd_hint
+        except Exception:
+            logger.debug("watchdog hint for %s failed (read-only, fail-open)", tid, exc_info=True)
         return json.dumps(payload)
 
 
@@ -1480,14 +1513,107 @@ def _handle_set_block_sla(args: dict, **kw) -> str:
         return _ok(**result)
 
 
+@_kanban_handler("kanban_watchdog_show")
+def _handle_watchdog_show(args: dict, **kw) -> str:
+    """Read-only watchdog view (governance stage 5).
+
+    Returns the task-bound independent watchdogs of the board (optionally
+    one task's) and their firing ledger — an independent reviewer finds its
+    pending firings here. Pure read: no events, no mutations, nothing is
+    released or decided by a read.
+    """
+    with _board(None if kw.get("task_id") else args.get("board")) as (kb, conn):
+        from hermes_cli import kanban_watchdog as _kwd
+
+        board = kb.get_current_board() or kb.DEFAULT_BOARD
+        task_id = args.get("task_id") or (kw.get("task_id") if args.get("board") is None else None)
+        pending = bool(args.get("pending"))
+        watchdogs = _kwd.list_watchdogs(conn, board, status="active")
+        if task_id:
+            watchdogs = [w for w in watchdogs if w["task_id"] == task_id]
+        firings = _kwd.list_firings(
+            conn, board, task_id=task_id, pending=pending,
+            watchdog_id=watchdogs[0]["id"] if len(watchdogs) == 1 else None,
+        )
+        return _ok(count=len(watchdogs), watchdogs=watchdogs, firings=firings)
+
+
+@_kanban_handler("kanban_watchdog_create")
+def _handle_watchdog_create(args: dict, **kw) -> str:
+    """Attach a task-bound independent watchdog (governance stage 5).
+
+    The kernel enforces the independence fences: one active watchdog per
+    task, and the reviewer may never be the task's own assignee or
+    implementer (no self-review). The watchdog never repairs — its decision
+    vocabulary is closed in the kernel.
+    """
+    _reject_delegated_child_mutation("kanban_watchdog_create")
+    task_id = args.get("task_id") or kw.get("task_id")
+    if not task_id:
+        return tool_error("kanban_watchdog_create: task_id is required")
+    reviewer = args.get("reviewer")
+    if not reviewer:
+        return tool_error("kanban_watchdog_create: reviewer is required")
+    with _board(None) as (kb, conn):
+        from hermes_cli import kanban_watchdog as _kwd
+
+        try:
+            result = _kwd.create_watchdog(
+                conn, board=kb.get_current_board() or kb.DEFAULT_BOARD,
+                task_id=task_id, reviewer=reviewer,
+                instructions=args.get("instructions"),
+                created_by=_persisted_identity(), via="tool",
+            )
+        except ValueError as exc:
+            return tool_error(f"kanban_watchdog_create: {exc}")
+        except PermissionError as exc:
+            return tool_error(f"kanban_watchdog_create: {exc}")
+        return _ok(**result)
+
+
+@_kanban_handler("kanban_watchdog_decide")
+def _handle_watchdog_decide(args: dict, **kw) -> str:
+    """Apply the independent reviewer's verdict (governance stage 5).
+
+    RESERVED for the watchdog's own reviewer profile — the kernel refuses
+    every other worker identity. Exactly one decision per firing; the
+    vocabulary is closed (accept/request_changes/reopen/reassign) and the
+    watchdog never repairs, never opens a human gate.
+    """
+    _reject_delegated_child_mutation("kanban_watchdog_decide")
+    watchdog_id = args.get("watchdog_id")
+    if not watchdog_id:
+        return tool_error("kanban_watchdog_decide: watchdog_id is required")
+    verb = args.get("verb")
+    with _board(None) as (kb, conn):
+        from hermes_cli import kanban_watchdog as _kwd
+
+        try:
+            result = _kwd.decide_firing(
+                conn, watchdog_id, verb=verb, decider=_persisted_identity(),
+                note=args.get("note"), assignee=args.get("assignee"), via="tool",
+            )
+        except ValueError as exc:
+            return tool_error(f"kanban_watchdog_decide: {exc}")
+        except (_kwd.WatchdogStateError, LookupError) as exc:
+            return tool_error(f"kanban_watchdog_decide: {exc}")
+        except PermissionError as exc:
+            return tool_error(f"kanban_watchdog_decide: {exc}")
+        return _ok(**result)
+
+
 # --- Registration (order preserved: it is the order tools appear in the schema) ---
 
 # kanban_list / kanban_unblock route the board and are hidden from task workers;
-# kanban_approval_request is additionally flag-gated (kanban.approvals.enabled).
+# kanban_approval_request is additionally flag-gated (kanban.approvals.enabled);
+# the watchdog tools are flag-gated (kanban.watchdog.enabled).
 _TOOL_GATES = {
     "kanban_list": _check_kanban_orchestrator_mode,
     "kanban_unblock": _check_kanban_orchestrator_mode,
     "kanban_approval_request": _check_kanban_approvals_mode,
+    "kanban_watchdog_show": _check_kanban_watchdog_mode,
+    "kanban_watchdog_create": _check_kanban_watchdog_mode,
+    "kanban_watchdog_decide": _check_kanban_watchdog_mode,
 }
 _TOOLS = (
     ("kanban_show", KANBAN_SHOW_SCHEMA, _handle_show, "📋"),
@@ -1508,6 +1634,9 @@ _TOOLS = (
     ("kanban_project_rollup", KANBAN_PROJECT_ROLLUP_SCHEMA, _handle_project_rollup, "📁"),
     ("kanban_inbox", KANBAN_INBOX_SCHEMA, _handle_inbox, "📥"),
     ("kanban_set_block_sla", KANBAN_SET_BLOCK_SLA_SCHEMA, _handle_set_block_sla, "⏱"),
+    ("kanban_watchdog_show", KANBAN_WATCHDOG_SHOW_SCHEMA, _handle_watchdog_show, "🐕"),
+    ("kanban_watchdog_create", KANBAN_WATCHDOG_CREATE_SCHEMA, _handle_watchdog_create, "🐕"),
+    ("kanban_watchdog_decide", KANBAN_WATCHDOG_DECIDE_SCHEMA, _handle_watchdog_decide, "🐕"),
     ("kanban_link", KANBAN_LINK_SCHEMA, _handle_link, "🔗"))
 
 for _name, _sch, _handler, _emoji in _TOOLS:

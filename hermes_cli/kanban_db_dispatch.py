@@ -148,9 +148,14 @@ class DispatchResult:
     budget_stopped: list[tuple[str, str]] = field(default_factory=list)
     """``(task_id, scope:ref)`` rows NOT spawned this tick because a monthly
     budget cap is exhausted (one ``budget_stopped`` event per (task, period)).
-    A dispatch gate like ``max_in_progress`` — the card stays ``ready`` and is
-    re-evaluated against the current limits every tick; it is NOT a block
+    A dispatch gate like ``max_in_progress`` — the card stays ``ready`` and
+    is re-evaluated against the current limits every tick; it is NOT a block
     (blocks are human semantics)."""
+    watchdog_report: Optional[dict] = None
+    """Report of the task-bound watchdog phase (governance stage 5), set only
+    when ``kanban.watchdog.tick_enabled`` armed it: ``checked``/``fired``/
+    ``rounds``/``escalated``. ``None`` = the phase did not run (flag off,
+    dry run, or fail-open skip) — flags-off ticks stay byte-identical."""
     skipped_locked: bool = False
     """True when another process held the board's dispatch lock: this tick did
     no DB writes; the lock holder is making progress on the same board."""
@@ -2549,6 +2554,23 @@ def _dispatch_once_locked(
             continue
         if _dispatch_lane_task(conn, row, row["assignee"], result, lane="review", **lane_kwargs):
             spawned += 1
+
+    # Task-bound watchdog phase (governance stage 5): flag-gated
+    # (``kanban.watchdog.tick_enabled``, default off = byte-identical tick)
+    # and fail-open — a watchdog problem must never break the tick. Runs
+    # AFTER the lanes so it can never delay or starve a spawn; it only
+    # fires the independent reviewer (event) and, at the identical-round
+    # limit, routes the stopped card to triage (the recurrence pattern).
+    if not dry_run:
+        try:
+            from hermes_cli import kanban_watchdog as _kwd
+
+            if _kwd.watchdog_tick_enabled():
+                # board=None means "the current board" everywhere in the tick.
+                result.watchdog_report = _kwd.check_watchdogs(
+                    conn, board=board or _kb.get_current_board() or _kb.DEFAULT_BOARD)
+        except Exception:
+            _kb._log.debug("kanban watchdog tick failed (fail-open)", exc_info=True)
     return result
 
 

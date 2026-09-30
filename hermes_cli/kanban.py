@@ -1341,6 +1341,21 @@ def _cmd_approval(args: argparse.Namespace) -> int:
     return dispatch_approval(args)
 
 
+def _cmd_watchdog(args: argparse.Namespace) -> int:
+    """``hermes kanban watchdog create|list|show|rm|check|decide`` — the
+    task-bound independent watchdog surface (governance stage 5).
+
+    Delegates to :func:`hermes_cli.kanban_watchdog.dispatch_watchdog`. The
+    watchdog never repairs: the decision vocabulary is exactly
+    accept/request_changes/reopen/reassign, and human gates
+    (needs_input/capability) are never opened by it. The worker toolset
+    decides only as the watchdog's own reviewer profile.
+    """
+    from hermes_cli.kanban_watchdog import dispatch_watchdog
+
+    return dispatch_watchdog(args)
+
+
 def _cmd_project(args: argparse.Namespace) -> int:
     """``hermes kanban project goal|rollup|list`` — the human project-governance
     surface (governance stage 3).
@@ -1399,6 +1414,7 @@ _HANDLERS = {
     "notify-list": _cmd_notify_list, "notify-unsubscribe": _cmd_notify_unsubscribe,
     "context": _cmd_context, "specify": _cmd_specify, "decompose": _cmd_decompose,
     "gc": _cmd_gc, "budget": _cmd_budget, "approval": _cmd_approval,
+    "watchdog": _cmd_watchdog,
     "project": _cmd_project, "inbox": _cmd_inbox, "block-sla": _cmd_block_sla,
 }
 

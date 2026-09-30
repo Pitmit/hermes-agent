@@ -858,6 +858,21 @@ hermes kanban runs t_abcd
 
 `hermes kanban tail <id>` 显示单个任务的这些事件。`hermes kanban watch` 在整个看板范围内流式传输它们。
 
+## 任务看门狗 (Task watchdogs)
+
+**任务看门狗**是绑定到单个任务的独立审查者：`hermes kanban watchdog create <task> --reviewer <profile> [--instructions …]` 为任务附加唯一一个活动看门狗。当任务*停止*时 —— 评审移交（`review`）或阻塞（`blocked`）—— 内核在服务端对停止状态做指纹（主体 + 停止原因），并按**每个不同指纹恰好一次**地点名审查者（`watchdog_fired` 事件携带审查者与指令）。已触发过的指纹再次停止只算一个*相同轮次*：仅计数。3 轮不变后看门狗一次性、粘性地升级：卡片进入 `triage` 并记录 `watchdog_escalated` 事件，看门狗冻结直到人工移除 —— 任何 tick 都不会重新触发或自动解决。
+
+看门狗**从不修复**。它的决策词汇恰好是 `accept | request_changes | reopen | reassign`（`hermes kanban watchdog decide <wd_id> --verb …`），每次触发只应用一次：
+
+- `accept` —— 停止状态成立；任务不被改动。
+- `request_changes` —— 仅评审停止：将卡片退回实现者（`changes_requested`）。
+- `reopen` —— 仅评审停止与 `transient` 阻塞。**看门狗绝不打开人工门禁**：`needs_input`/`capability` 阻塞仍由人工 unblock/审批流程处理。
+- `reassign` —— 将任务移交给另一个受理人（标准 `assigned` 事件）。
+
+围栏全部 fail-closed：禁止自我审查（审查者永远不能是任务自己的受理人或实现者，创建与决策时都检查）；worker 工具（`kanban_watchdog_decide`，由 `kanban.watchdog.enabled` 门控）仅保留给看门狗自己的审查者配置 —— 其他人只能通过 CLI 决策。未被监视的卡片永远不会被触碰：检查阶段（调度器 tick，由 `kanban.watchdog.tick_enabled` 门控，默认关闭；或显式 `hermes kanban watchdog check`）只读取看门狗行并发射事件。
+
+事件：`watchdog_created`、`watchdog_removed`、`watchdog_fired`、`watchdog_round`、`watchdog_decided`、`watchdog_escalated`。
+
 ## 范围之外
 
 Kanban 是刻意单主机的。`~/.hermes/kanban.db` 是本地 SQLite 文件，调度器在同一台机器上启动 worker。不支持跨两台主机运行共享看板 —— 没有"主机 A 上的 worker X，主机 B 上的 worker Y"的协调原语，崩溃检测路径假设 PID 是主机本地的。如果你需要多主机，每台主机运行独立的看板，并使用 `delegate_task` / 消息队列来桥接它们。

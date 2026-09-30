@@ -1435,6 +1435,21 @@ Every transition appends a row to `task_events`. Each row carries an optional `r
 
 `hermes kanban tail <id>` shows these for a single task. `hermes kanban watch` streams them board-wide.
 
+## Task watchdogs
+
+A **task watchdog** is a task-bound independent reviewer: `hermes kanban watchdog create <task> --reviewer <profile> [--instructions …]` attaches ONE active watchdog to a task. When the task *stops* — a review handoff (`review`) or a block (`blocked`) — the kernel fingerprints that stopped state server-side (subject + stop cause) and fires the named reviewer **exactly once per distinct fingerprint** (`watchdog_fired` event carrying reviewer + instructions). A stop with an already-fired fingerprint is an *identical round*: it only counts. After 3 unchanged rounds the watchdog escalates once, stickily: the card routes to `triage` with a `watchdog_escalated` event and the watchdog freezes until a human removes it — no tick ever re-fires or auto-resolves it.
+
+The watchdog **never repairs**. Its decision vocabulary is exactly `accept | request_changes | reopen | reassign` (`hermes kanban watchdog decide <wd_id> --verb …`), applied once per firing:
+
+- `accept` — the stopped state stands; the task is not mutated.
+- `request_changes` — review stops only: routes the card back to the implementer (`changes_requested`).
+- `reopen` — review stops and `transient` blocks only. **Human gates are never opened by the watchdog**: `needs_input`/`capability` blocks stay with the human unblock/approval flow.
+- `reassign` — hands the task to another assignee (standard `assigned` event).
+
+Fences are fail-closed: no self-review (the reviewer may never be the task's own assignee or implementer, checked at create *and* at decide), and the worker tool (`kanban_watchdog_decide`, gated on `kanban.watchdog.enabled`) is reserved for the watchdog's own reviewer profile — everyone else decides via the CLI. Unwatched cards are never touched: the check phase (dispatcher tick, gated on `kanban.watchdog.tick_enabled`, default off, or explicit `hermes kanban watchdog check`) only reads watchdog rows and fires events.
+
+Events: `watchdog_created`, `watchdog_removed`, `watchdog_fired`, `watchdog_round`, `watchdog_decided`, `watchdog_escalated`.
+
 ## Out of scope
 
 Kanban is deliberately single-host. `~/.hermes/kanban.db` is a local SQLite file and the dispatcher spawns workers on the same machine. Running a shared board across two hosts is not supported — there's no coordination primitive for "worker X on host A, worker Y on host B," and the crash-detection path assumes PIDs are host-local. If you need multi-host, run an independent board per host and use `delegate_task` / a message queue to bridge them.

@@ -220,6 +220,48 @@ _APPROVAL_SPECS = [
     ], help="Ask for revision (keeps the request open)"),
 ]
 
+# ``hermes kanban watchdog <action>`` records (governance stage 5: task-bound
+# independent watchdog). The watchdog fires an independent reviewer exactly
+# once per distinct stopped-state fingerprint (review handoffs and blocks)
+# and NEVER repairs: its only decision verbs are
+# accept/request_changes/reopen/reassign. Human gates (needs_input /
+# capability) are never opened by it.
+_WATCHDOG_SPECS = [
+    _cmd("create", [
+        _arg("task", help="Task id to watch"),
+        _arg("--reviewer", required=True,
+             help="Independent reviewer profile (must differ from the task's assignee/implementer)"),
+        _arg("--instructions",
+             help="Reviewer-facing check contract (what the reviewer verifies)"),
+        _json_flag(help="Emit the watchdog row as JSON"),
+    ], help="Attach an independent watchdog to a task (one active per task)"),
+    _cmd("list", [
+        _arg("--status", choices=("active", "retired"), help="Filter by status (default: all)"),
+        _json_flag(help="Emit one JSON array"),
+    ], help="List this board's watchdogs"),
+    _cmd("show", [
+        _arg("watchdog_id", help="Watchdog id (wd_...) or the watched task's id"),
+        _json_flag(help="Emit watchdog + firing ledger as JSON"),
+    ], help="Show one watchdog with its full firing/audit trail"),
+    _cmd("rm", [
+        _arg("watchdog_id", help="Watchdog id (wd_...) or the watched task's id"),
+        _json_flag(help="Emit the retired watchdog row as JSON"),
+    ], help="Retire a watchdog (audit-preserving)"),
+    _cmd("check", [
+        _arg("--task", help="Only check one task's watchdog"),
+        _json_flag(help="Emit the check report as JSON"),
+    ], help="Run the watchdog check now (the dispatcher does this per tick when kanban.watchdog.tick_enabled)"),
+    _cmd("decide", [
+        _arg("watchdog_id", help="Watchdog id (wd_...)"),
+        _arg("--verb", choices=("accept", "request_changes", "reopen", "reassign"),
+             required=True,
+             help="The verdict: accept | request_changes | reopen | reassign (the watchdog never repairs)"),
+        _arg("--note", help="Decision note (audit trail)"),
+        _arg("--assignee", help="New assignee profile (verb reassign only)"),
+        _json_flag(help="Emit the decided firing as JSON"),
+    ], help="Apply the independent reviewer's verdict to the latest open firing (exactly once)"),
+]
+
 # ``hermes kanban project <action>`` records (governance stage 3: goals and
 # rollups over the EXISTING tasks.project_id). Goal/budget writes are the
 # HUMAN surface — workers read rollups via the kanban_project_rollup tool and
@@ -558,6 +600,8 @@ _SPECS = [
          help="Monthly cost budgets: set/show/rm (workers see, only humans set)"),
     _cmd("approval", children=("approval_action", _APPROVAL_SPECS),
          help="Generic human approvals: request/list/show/approve/reject/revise (workers ask, only humans decide)"),
+    _cmd("watchdog", children=("watchdog_action", _WATCHDOG_SPECS),
+         help="Task-bound independent watchdog: create/list/show/rm/check/decide (fires once per stopped state, never repairs)"),
     _cmd("project", children=("project_action", _PROJECT_SPECS),
          help="Project goals + rollups: goal/rollup/list (workers read, only humans set)"),
     # Governance stage 4: read-only blocked inbox + per-task SLA override.

@@ -1898,6 +1898,17 @@ DEFAULT_CONFIG = {
         "approvals": {
             "enabled": False,
         },
+        # Task-bound independent watchdog (governance stage 5): ONE active
+        # independent, non-repairing reviewer per task, fired exactly once per
+        # distinct stopped-state fingerprint (review handoffs and blocks).
+        # ``enabled`` gates the worker-side tools (kanban_watchdog_*), exactly
+        # like the approvals flag; ``tick_enabled`` gates the dispatcher tick
+        # phase (off = byte-identical ticks). The CLI surface is additive and
+        # always available; human gates are never opened automatically.
+        "watchdog": {
+            "enabled": False,
+            "tick_enabled": False,
+        },
         # Blocked-inbox thresholds (governance stage 4). Both are advisory
         # escalation thresholds for the read-only inbox projection — they never
         # gate, release or unblock anything. ``blocked_stale_hours`` is the

@@ -1,0 +1,52 @@
+{
+  "task": "t_0e61b81b",
+  "stage": "Governance P1-A1: task-gebundener unabhaengiger Watchdog (governance stage 5)",
+  "base_sha": "fa9812667feff62d29ea76c5cc28badbcf6cf2c3",
+  "branch": "feat/kanban-governance-p0",
+  "commit_message": "feat: add kanban task watchdogs",
+  "changed_files": [
+    "hermes_cli/kanban_watchdog.py (new, 996 lines: task_watchdogs + task_watchdog_firings tables, stopped-state fingerprint, check_watchdogs phase, decide_firing apply path, CLI dispatch)",
+    "tests/hermes_cli/test_kanban_watchdog.py (new, 23 tests)",
+    "hermes_cli/kanban_db.py (SCHEMA_SQL: watchdog tables, legacy-DB additive migration)",
+    "hermes_cli/kanban_db_dispatch.py (flag-gated fail-open watchdog tick phase, runs after the lanes, watchdog_report on the DispatchResult)",
+    "hermes_cli/kanban_parser.py (hermes kanban watchdog {create,list,show,retire,check,decide} CLI verbs)",
+    "hermes_cli/kanban.py (_cmd_watchdog handlers; gateway /kanban via run_slash)",
+    "hermes_cli/config_defaults.py (kanban.watchdog.enabled/tick_enabled, both default off)",
+    "tools/kanban_tools.py (kanban_watchdog_create/show/decide worker tools, opt-in gated like approvals; decide via='tool' reserved for the watchdog reviewer)",
+    "tools/kanban_tools_schemas.py (three new schemas)",
+    "website/docs/user-guide/features/kanban.md + zh-Hans twin (watchdog section)",
+    "artifacts/run-watchdog-tests.sh + artifacts/watchdog-iter.sh (disposable heavy-test harness)",
+    "artifacts/watchdog-test-receipt.json (this receipt)"
+  ],
+  "test_host": "vm-worker-gen (VM124, 10.10.10.124), disposable /var/tmp/hermes-watchdog-iter (build once, reuse across iterations, rm -rf after green)",
+  "harness": "artifacts/watchdog-iter.sh — free-space proof 115926576 KiB (>= 5 GiB) before every run; pm.build_env venv + HOME + HERMES_HOME + caches under TEST_ROOT; scripts/run_tests.sh per-file parallel runner (TZ=UTC LANG=C.UTF-8, clean env)",
+  "commands": [
+    "bash artifacts/run-watchdog-tests.sh (iteration 1: new tests + existing suites + git diff --check)",
+    "bash artifacts/watchdog-iter.sh tests/hermes_cli/test_kanban_watchdog.py (iteration 2: fix verify, 23/23 green)",
+    "bash artifacts/watchdog-iter.sh <full matrix: 23 files> (iteration 3: regression matrix, RUN_RC=0)"
+  ],
+  "results": {
+    "new_tests": "23/23 passed (tests/hermes_cli/test_kanban_watchdog.py), iteration 2 RUN_RC=0 (12:22:53-12:23:06Z)",
+    "regression_matrix": "23 files, 515 tests passed, 0 failed, 5 skipped (platforms('windows') lane-skips on linux), iteration 3 RUN_RC=0 (12:23:16-12:24:07Z) — matrix: watchdog, approvals, inbox, blocked_sticky, block_kinds, review_lifecycle, review_surfaces, db, db_init, core_functionality, cli, boards, reclaim_claim_lock_guard, pr_acceptance, project_link, projects, cost_budget, config, agent/kanban_lifecycle_loop_guard, tools/kanban_tools, tools/kanban_unknown_arguments, tools/kanban_toolset_opt_in, tools/kanban_redaction",
+    "git_diff_check": "clean (DIFFCHECK_RC=0)",
+    "cleanup": "NO_LEFTOVERS proven after green: /var/tmp/hermes-watchdog-iter EXISTS_AFTER=no, 774848 KiB recovered (df 115926212 -> 116701060 KiB); no leftover venv processes",
+    "iterations": "run 1 (watchdog-test-run.log, 12:19Z): 19 of 23 red — two real kernel bugs found by the tests: (a) _latest_event returned only the payload, not the event row -> stopped_state_fingerprint now uses its own query; (b) the no-self-review fence compared against the raw assignee instead of the canonical one (BoardTask vs row dict) -> _canonical_assignee fence. run 2: 23/23 green after the fixes. run 3: full 23-file regression matrix green. All fixes were in kanban_watchdog.py (12:22:43), before the final green run (12:23:16) — the committed bytes are exactly the tested bytes."
+  },
+  "acceptance_criteria_proven": [
+    "reviewer profile/id + instructions are stored on the watchdog row (create refuses empty reviewer); the watchdog_fired event carries reviewer + instructions (the trigger for the independent review)",
+    "stopped-state fingerprint: sha256 over (stop_kind=review|blocked, latest stop event id + payload hash, task status, assignee, current handoff summary) — a NEW fingerprint fires again, an identical one only counts",
+    "exactly-once per distinct outcome: UNIQUE(watchdog_id, fingerprint) on task_watchdog_firings; INSERT-race loser is a no-op; decide_firing refuses a decided firing ('decisions apply exactly once')",
+    "closed verb vocabulary WATCHDOG_VERBS = {accept, request_changes, reopen, reassign} — no repair verb exists; unknown verb raises ValueError; decide never mutates task content (title/body/workspace untouched, test_decide_never_mutates_task_content)",
+    "no self-review: create refuses reviewer == assignee or current implementer; decide refuses decider == assignee or implementer; worker tool path (via='tool') accepts ONLY the watchdog's own reviewer profile",
+    "identical-round escalation: WATCHDOG_ROUND_LIMIT=3 — a re-entered stop with an already-fired fingerprint counts one watchdog_round event (deduped by stop_event_id); at round 3 sticky escalation exactly once (escalated_at IS NULL fence): task routed to triage, claim lock cleared, watchdog frozen until a human removes it; a decided firing still counts identical rounds",
+    "unwatched/escalated/retired watchdogs are skipped — check_watchdogs touches no other cards (test_check_touches_no_unwatched_cards)",
+    "CLI read/create/apply paths: hermes kanban watchdog create|list|show|retire|check|decide (json flags, fail-closed rc=1 refusals, audit trail in show)",
+    "tools: kanban_watchdog_create/show/decide registered in the kanban toolset, gated by kanban.watchdog.enabled (default off) exactly like the approvals flag; decider profile comes from the calling session, via='tool'",
+    "safe dispatcher transition: tick phase flag-gated by kanban.watchdog.tick_enabled (default off = byte-identical ticks, test_dispatcher_flag_off_is_neutral), fail-open (a watchdog exception can never break the tick), runs AFTER the lanes so it never delays a spawn, and runs exactly once per tick (test_dispatcher_flag_on_runs_the_phase_exactly_once)",
+    "audit events: watchdog_fired / watchdog_round / watchdog_escalated / watchdog_decided, each exactly one per occurrence, with outcome_fingerprint stored server-side",
+    "config keys registered in DEFAULT_CONFIG (kanban.watchdog.enabled/tick_enabled) with runtime readers and both default-off proven through the real loader (test_config_keys_live_through_real_loader, test_config_keys_default_off)",
+    "legacy DB migration: watchdog tables are added additively when an old board connects (test_legacy_db_creates_watchdog_tables_and_serves)"
+  ],
+  "notes": "Scope strictly per task card: ONLY the task-bound independent watchdog — no routine/cron/workflow-template code, no profiles provisioned, no services restarted. The watchdog is deliberately NOT an auto-fixer: its whole decision surface is firing the independent reviewer (event with reviewer + instructions) and applying that reviewer's verdict through the four non-repair verbs. Sticky escalation routes to triage (the established recurrence-routing pattern) and freezes the watchdog — only a human removes it; no path re-opens a human gate. The dispatcher tick integration is the minimal safe shape: flag-gated (default off, byte-identical ticks when off), fail-open, after the lanes, exactly once per tick.",
+  "worker_session_ids": ["run 162: implementation + tests + iterations 1-3 (timed out 20 s after the green matrix run)", "run 165: verification of the green bytes + cleanup proof + receipt + commit"]
+}
