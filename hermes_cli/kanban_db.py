@@ -1238,6 +1238,28 @@ CREATE TABLE IF NOT EXISTS task_watchdog_firings (
 CREATE INDEX IF NOT EXISTS idx_task_watchdog_firings_task
     ON task_watchdog_firings(board, task_id, id);
 
+-- Workflow templates (governance stage 6, P1-A3): user-definable LINEAR step
+-- chains, delivered as data. steps is a JSON list of
+-- {step_key, title, assignee(role), skills?, workspace_kind?, workspace_path?,
+--  remote_workspace_verified?, priority?, review?, approval_type?, body?}
+-- objects (kanban_workflows.parse_workflow_steps validates; a repeated
+-- step_key is the only cycle a linear chain can express and is rejected).
+-- Roles are resolved to concrete profiles at APPLY time; the application
+-- validates profiles/skills/workspaces fail-closed BEFORE persisting anything
+-- and creates the whole step chain in ONE transaction
+-- (kanban_workflows.apply_workflow_template).
+CREATE TABLE IF NOT EXISTS kanban_workflow_templates (
+    board       TEXT NOT NULL,
+    id          TEXT NOT NULL,      -- 'wf_<kebab-name>' / 'wf_<hex>'
+    name        TEXT NOT NULL,
+    steps       TEXT NOT NULL,      -- JSON: [{step_key, title, assignee, ...}]
+    created_by  TEXT NOT NULL,
+    created_at  INTEGER NOT NULL,
+    PRIMARY KEY (board, id)
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_templates_board
+    ON kanban_workflow_templates(board, id);
+
 -- Project governance (governance stage 3): goal / owner / budget metadata for
 -- the EXISTING tasks.project_id (worktree anchor, _resolve_project_link).
 -- Board-first: the shared board DB is the governance layer; the per-profile
@@ -1454,6 +1476,7 @@ def create_task(
     project_source_task_id: Optional[str] = None,
     creator_task_id: Optional[str] = None,
     completion_contract: Optional[str] = None,
+    workflow_template_id: Optional[str] = None, current_step_key: Optional[str] = None,
 ) -> str:
     """Create a task (optionally under ``parents``); returns its id.
 
@@ -1469,12 +1492,18 @@ def create_task(
     in the active profile's projects.db — see ``_resolve_project_link``.
     ``workspace_kind=None`` (omitted) inherits a project-scoped board's project;
     an explicit ``"scratch"`` or ``project_id=""`` is a request for no project.
+    ``workflow_template_id``/``current_step_key``: governance stage 6 workflow
+    columns — written by ``kanban_workflows.apply_workflow_template`` (and
+    opaque to the kernel otherwise); surfaced in the ``created`` event payload
+    only when set so plain creates stay byte-identical.
     """
     from hermes_cli.kanban_db_graph import initial_task_state, inherit_creator_origin
     from hermes_cli.kanban_pr_acceptance import validate_contract
 
     completion_contract = validate_contract(completion_contract)
     model_override, provider_override = _validate_model_override(model_override, provider_override)
+    workflow_template_id = (str(workflow_template_id).strip() or None) if workflow_template_id else None
+    current_step_key = (str(current_step_key).strip() or None) if current_step_key else None
     reasoning_effort = normalize_reasoning_effort(reasoning_effort)
     assignee = _canonical_assignee(assignee)
     if not title or not title.strip():
@@ -1553,8 +1582,9 @@ def create_task(
                         max_runtime_seconds,
                         skills, max_retries, model_override, provider_override,
                         reasoning_effort,
-                        goal_mode, goal_max_turns, session_id, completion_contract
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        goal_mode, goal_max_turns, session_id, completion_contract,
+                        workflow_template_id, current_step_key
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         task_id, title.strip(), body, assignee, task_status, priority,
@@ -1564,6 +1594,7 @@ def create_task(
                         json.dumps(skills_list) if skills_list is not None else None,
                         _opt_int(max_retries), model_override, provider_override, reasoning_effort,
                         1 if goal_mode else 0, _opt_int(goal_max_turns), session_id, completion_contract,
+                        workflow_template_id, current_step_key,
                     ),
                 )
                 for pid in parents:
@@ -1586,6 +1617,9 @@ def create_task(
                         "goal_mode": bool(goal_mode) or None,
                         "model_override": model_override,
                         "provider_override": provider_override,
+                        **({"workflow_template_id": workflow_template_id,
+                            "current_step_key": current_step_key}
+                           if workflow_template_id or current_step_key else {}),
                     },
                 )
                 if task_status == "blocked":

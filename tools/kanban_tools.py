@@ -1203,11 +1203,78 @@ def _validate_remote_dir_workspace(
                "The card was not created.")
 
 
+def _handle_create_workflow(args: dict, title: str) -> str:
+    """``workflow_template_id`` branch of ``kanban_create``: apply a template.
+
+    The kernel (:func:`hermes_cli.kanban_workflows.apply_workflow_template`)
+    validates every step's resolved profile, forced skills and remote
+    workspace fail-closed BEFORE anything is persisted, then creates the whole
+    chain (cards + parent edges + one ``workflow_applied`` audit event) in a
+    single transaction — a rejected application leaves no partial graph and a
+    retry with the same ``idempotency_key`` reads the same chain back.
+    """
+    for flag in ("assignee", "skills", "workspace_kind", "workspace_path",
+                 "project", "project_id", "triage", "goal_mode", "goal_max_turns",
+                 "model", "provider", "max_retries", "max_runtime_seconds",
+                 "remote_workspace_verified", "completion_contract"):
+        _check(not args.get(flag),
+               f"'{flag}' conflicts with workflow_template_id — step assignees, "
+               "skills and workspaces come from the template plus 'roles'")
+    if str(args.get("initial_status") or "running") != "running":
+        _check(False, "'initial_status' conflicts with workflow_template_id")
+    roles = args.get("roles")
+    _check(isinstance(roles, dict) and roles and all(
+               isinstance(v, str) and v.strip() for v in roles.values()),
+           "roles must be a non-empty object mapping template role names to "
+           "profile names, e.g. {\"researcher\": \"worker-a\"}")
+    parents = _coerce_str_list(args.get("parents") or [], "parents", "task ids")
+    with _board(args.get("board")) as (kb, conn):
+        from hermes_cli.kanban_workflows import (
+            apply_workflow_template, ensure_reference_templates,
+        )
+
+        # Legacy board, first template use in this process: make sure the
+        # reference set exists before resolving the id (connect seeds once per
+        # process per board path).
+        ensure_reference_templates(conn)
+        self_tid = (os.environ.get("HERMES_KANBAN_TASK")
+                    if _is_dispatcher_owned_worker() else None)
+        session_id = _persisted_session_id(args.get("session_id"))
+        applied = apply_workflow_template(
+            conn, template_id=str(args.get("workflow_template_id")),
+            title=title, body=args.get("body"), role_map=roles,
+            board=args.get("board"),
+            tenant=args.get("tenant") or os.environ.get("HERMES_TENANT"),
+            priority=_opt_int(args.get("priority"), 0),
+            created_by=_persisted_identity(), session_id=session_id,
+            idempotency_key=args.get("idempotency_key"),
+            extra_parents=parents, creator_task_id=self_tid,
+        )
+        steps = []
+        for step_key, tid in zip(applied.step_keys, applied.step_task_ids):
+            task = kb.get_task(conn, tid)
+            steps.append({
+                "step_key": step_key, "task_id": tid,
+                "assignee": task.assignee if task else None,
+                "status": task.status if task else None,
+            })
+        return _ok(
+            workflow_template_id=applied.template_id,
+            template_name=applied.template_name,
+            task_id=applied.root_task_id, root_task_id=applied.root_task_id,
+            steps=steps, deduplicated=applied.deduplicated,
+            gated=steps[0]["status"] != "ready" if steps else False,
+            subscribed=_maybe_auto_subscribe(conn, applied.root_task_id),
+        )
+
+
 @_kanban_handler("kanban_create")
 def _handle_create(args: dict, **kw) -> str:
     """Create a (child) task; orchestrator workers use this to fan out."""
     _reject_delegated_child_mutation("kanban_create")
     title = _require_text(args, "title")
+    if args.get("workflow_template_id"):
+        return _handle_create_workflow(args, title=str(title).strip())
     assignee = args.get("assignee")
     _check(assignee, "assignee is required — name the profile that should execute this "
                      "task (the dispatcher will only spawn tasks with an assignee)")

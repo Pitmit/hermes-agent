@@ -740,14 +740,38 @@ KANBAN_CREATE_SCHEMA = _schema(
         )),
         "provider": _prop("string", (
                 "Provider the 'model' belongs to (e.g. 'openrouter', "
-                "'anthropic', 'nous'). Set this whenever the model "
-                "is not from the assignee profile's configured "
+                "'anthropic', 'nous'). Set this whenever the model is "
+                "not from the assignee profile's configured "
                 "provider — a model name alone is resolved against "
                 "the profile's provider and will fail if it belongs "
                 "to a different one. Requires 'model'."
         )),
+        "workflow_template_id": _prop("string", (
+            "Apply a workflow template instead of a single task: creates the "
+            "FULL linear step chain atomically (one card per step, each "
+            "parent-gated on its predecessor — see `hermes kanban "
+            "workflow-template list` for ids and roles). Each step card is "
+            "'<title> — <step title>' and carries workflow_template_id plus "
+            "its current_step_key. Conflicts with assignee/skills/workspace/"
+            "project/triage/goal_mode/model/provider/initial_status: step "
+            "assignees come from 'roles', and everything is validated "
+            "fail-closed (profiles, forced skills, remote workspaces) "
+            "BEFORE a single card is persisted."
+        )),
+        "roles": {
+            "type": "object",
+            "additionalProperties": {"type": "string"},
+            "description": (
+                "Role→profile mapping, required with workflow_template_id for "
+                "every role the template uses, e.g. "
+                '{"researcher": "worker-a", "reviewer": "reviewer-b"}. '
+                "An unmapped role, an unknown profile, a missing forced skill "
+                "or an unverified remote workspace rejects the whole "
+                "application without a partial graph."
+            ),
+        },
     },
-    ["title", "assignee"],
+    ["title"],
 )
 
 KANBAN_UNBLOCK_SCHEMA = _schema(

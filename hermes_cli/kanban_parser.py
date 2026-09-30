@@ -321,6 +321,30 @@ _INBOX_SPECS = [
     ], help="Set/show/clear a task's blocked-SLA override (advisory triage metadata)"),
 ]
 
+# ``hermes kanban workflow-template <verb>`` (governance stage 6, P1-A3):
+# user-definable linear workflow templates, stored as data in the board DB.
+# Applying a template rides on ``hermes kanban create --workflow-template``.
+_WORKFLOW_TEMPLATE_SPECS = [
+    _cmd("create", [
+        _arg("name", help="Human-readable template name"),
+        _arg("--steps", required=True, metavar="JSON|@FILE",
+             help="JSON list of step objects: {step_key, title, assignee (role), "
+                  "skills?, workspace_kind?, workspace_path?, remote_workspace_verified?, "
+                  "priority?, review?, approval_type?, body?}. Linear chains only; "
+                  "a repeated step_key is rejected."),
+        _arg("--id", dest="template_id", metavar="ID",
+             help="Template id (wf_<kebab-name>); generated when omitted"),
+        _json_flag(help="Emit the template as JSON"),
+    ], help="Define a workflow template (validated fail-closed before insert)"),
+    _cmd("list", [
+        _json_flag(help="Emit one JSON array"),
+    ], help="List this board's workflow templates (five reference templates are seeded)"),
+    _cmd("show", [
+        _arg("template_id", metavar="ID", help="Template id (wf_…)"),
+        _json_flag(help="Emit the template as JSON"),
+    ], help="Show one workflow template with its step chain"),
+]
+
 # Top-level ``hermes kanban <action>`` records, in ``--help`` order.
 _SPECS = [
     _cmd("init", help="Create kanban.db if missing (idempotent)"),
@@ -360,6 +384,17 @@ _SPECS = [
              help="Per-task runtime cap. Accepts seconds (300) or durations (90s, "
                   "30m, 2h, 1d). When exceeded, the dispatcher SIGTERMs (then "
                   "SIGKILLs) the worker and re-queues the task."),
+        _arg("--workflow-template", metavar="ID",
+             help="Apply a workflow template: creates the FULL linear step chain "
+                  "atomically (one card per step, parent-gated in order). The title "
+                  "names the workflow instance; each step card is "
+                  "'<title> — <step title>'. Assignees come from --role mappings, "
+                  "NOT --assignee. Conflicts with --assignee/--skill/--workspace/"
+                  "--branch/--triage/--goal/--model/--provider/--initial-status."),
+        _arg("--role", action="append", default=[], metavar="ROLE=PROFILE",
+             help="Map a template role to a concrete profile (repeatable, "
+                  "required per role used by --workflow-template), e.g. "
+                  "--role researcher=worker-a --role reviewer=reviewer-b"),
         _arg("--created-by", default="user", help="Author name recorded on the task (default: user)"),
         _arg("--skill", action="append", default=[], dest="skills",
              help="Skill to force-load into the worker (repeatable). The kanban "
@@ -602,6 +637,8 @@ _SPECS = [
          help="Generic human approvals: request/list/show/approve/reject/revise (workers ask, only humans decide)"),
     _cmd("watchdog", children=("watchdog_action", _WATCHDOG_SPECS),
          help="Task-bound independent watchdog: create/list/show/rm/check/decide (fires once per stopped state, never repairs)"),
+    _cmd("workflow-template", aliases=["wf"], children=("workflow_template_action", _WORKFLOW_TEMPLATE_SPECS),
+         help="User-definable workflow templates: create/list/show (linear step chains; apply via `kanban create --workflow-template`)"),
     _cmd("project", children=("project_action", _PROJECT_SPECS),
          help="Project goals + rollups: goal/rollup/list (workers read, only humans set)"),
     # Governance stage 4: read-only blocked inbox + per-task SLA override.

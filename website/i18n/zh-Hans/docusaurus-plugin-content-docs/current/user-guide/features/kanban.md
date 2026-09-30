@@ -812,9 +812,15 @@ hermes kanban runs t_abcd
 
 **实时抽屉刷新。** 当仪表盘的 WebSocket 事件流报告用户当前正在查看的任务的新事件时，抽屉会重新加载自身（通过线程到其 `useEffect` 依赖列表中的每任务事件计数器）。不再需要关闭并重新打开才能看到运行的新行或更新的结果。
 
-### 向前兼容性
+### 工作流模板
 
-`tasks` 上的两个可空列为 v2 工作流路由保留：`workflow_template_id`（此任务属于哪个模板）和 `current_step_key`（该模板中哪个步骤处于活动状态）。v1 内核忽略它们用于路由，但允许客户端写入它们，因此 v2 版本可以添加路由机制而无需另一次 schema 迁移。
+线性工作流链是一等公民：用户自定义**模板**以数据形式存放在看板数据库中（`hermes kanban workflow-template create|list|show`，别名 `wf`）——一个 JSON 步骤列表，每个步骤携带 `step_key`、标题和一个**受理角色**（不是具体 profile），可选地携带强制 `skills`、`workspace`、`priority`、`review: true` 或 `approval_type`。五个参考模板会在每个看板上幂等预置（重新定义参考 id 会保留你的版本）：`research-synthesis-review`、`recon-implement-review`、`implement-publish-gate-approve-merge`、`incident-rca-repair-verify` 和 `migration-recon-snapshot-execute-userpath-accept`。
+
+应用模板（`hermes kanban create --workflow-template <id> --role ROLE=PROFILE …`，或带 `workflow_template_id` + `roles` 的 `kanban_create` 工具）会在**一个事务中创建完整步骤链**：每步一张卡，每张卡通过普通的 `task_links` 提升门控挂在其前驱上——没有单独的路由引擎，父门控就是顺序本身。每张卡都盖有 `workflow_template_id` 和它的 `current_step_key`，认领卡片时也会写入 `task_runs.step_key`。
+
+校验在**任何内容持久化之前**即失败关闭（fail-closed）：每个角色都必须映射到已安装的 profile，强制技能必须能在受理 profile 自身的目录中解析，远程工作区遵循与普通创建相同的规则（SSH 后端的受理者需要 scratch 工作区或看板共享工作区根目录下的路径，除非 `remote_workspace_verified` 是诚实的探针结果）。被拒绝的应用不会留下半个图。`idempotency_key` 会对整个应用去重——重试会读回同一条链——每次应用都会在第一张步骤卡上追加恰好一条 `workflow_applied` 审计事件。
+
+带 `review: true` 或 `approval_type` 的步骤将契约携带在卡片正文上：步骤卡本身就是门（下一步等待它完成），人工决策继续走既有的 review/approval 通道——模板绝不自行批准任何内容。
 
 ## 事件参考
 

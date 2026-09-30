@@ -344,6 +344,9 @@ def _cmd_create(args: argparse.Namespace) -> int:
         except OSError as exc:
             return _err(f"kanban: --body-file: {exc}", 2)
 
+    if getattr(args, "workflow_template", None):
+        return _cmd_create_workflow(args, body)
+
     try:
         ws_kind, ws_path = _parse_workspace_flag(args.workspace)
         branch_name = _parse_branch_flag(getattr(args, "branch", None))
@@ -388,6 +391,80 @@ def _cmd_create(args: argparse.Namespace) -> int:
             running, message = _check_dispatcher_presence()
             if not running and message:
                 print(f"\n⚠  {message}", file=sys.stderr)
+    return 0
+
+
+def _cmd_create_workflow(args: argparse.Namespace, body) -> int:
+    """``hermes kanban create --workflow-template`` — apply a template chain.
+
+    The whole step chain (cards + parent edges + audit event) is created in
+    ONE transaction; a rejected application leaves no partial graph.
+    """
+    from hermes_cli.kanban_workflows import (
+        _parse_role_arg, apply_workflow_template, ensure_reference_templates,
+    )
+
+    conflicts = [
+        flag for flag, value in (
+            ("--assignee", getattr(args, "assignee", None)),
+            ("--skill", getattr(args, "skills", None)),
+            ("--workspace", getattr(args, "workspace", None)),
+            ("--branch", getattr(args, "branch", None)),
+            ("--project", getattr(args, "project", None)),
+            ("--triage", getattr(args, "triage", False)),
+            ("--goal", getattr(args, "goal_mode", False)),
+            ("--goal-max-turns", getattr(args, "goal_max_turns", None)),
+            ("--model", getattr(args, "model_override", None)),
+            ("--provider", getattr(args, "provider_override", None)),
+            ("--max-retries", getattr(args, "max_retries", None)),
+            ("--completion-contract", getattr(args, "completion_contract", None)),
+            ("--initial-status", str(getattr(args, "initial_status", "") or "")
+             not in ("", "running")),
+        ) if value
+    ]
+    if conflicts:
+        return _err(
+            "kanban: " + ", ".join(conflicts) + " conflict with --workflow-template — "
+            "step assignees/skills/workspaces come from the template plus --role "
+            "mappings; retry without those flags", 2)
+    role_map: dict = {}
+    for raw in (getattr(args, "role", None) or []):
+        try:
+            role, profile = _parse_role_arg(raw)
+        except argparse.ArgumentTypeError as exc:
+            return _err(f"kanban: --role: {exc}", 2)
+        role_map[role] = profile
+    from agent.delegation_context import is_dispatcher_owned_worker_context
+
+    with kbc.connect_closing() as conn:
+        # First use on a legacy board: the reference set may not be seeded yet
+        # in THIS process (connect seeds once per process per board path).
+        ensure_reference_templates(conn)
+        try:
+            applied = apply_workflow_template(
+                conn,
+                template_id=getattr(args, "workflow_template"),
+                title=args.title, body=body, role_map=role_map,
+                tenant=getattr(args, "tenant", None),
+                priority=getattr(args, "priority", 0) or 0,
+                created_by=getattr(args, "created_by", None) or _profile_author(),
+                idempotency_key=getattr(args, "idempotency_key", None),
+                extra_parents=tuple(getattr(args, "parent", None) or ()),
+                creator_task_id=(os.environ.get("HERMES_KANBAN_TASK")
+                                 if is_dispatcher_owned_worker_context() else None),
+            )
+        except ValueError as exc:
+            return _err(f"kanban: {exc}", 2)
+    if getattr(args, "json", False):
+        _print_json(applied.as_dict())
+        return 0
+    steps = ", ".join(
+        f"{key}={tid}" for key, tid in zip(applied.step_keys, applied.step_task_ids))
+    print(f"Applied workflow {applied.template_id} ({applied.template_name})")
+    print(f"  Root: {applied.root_task_id}")
+    print(f"  Steps: {steps}")
+    if applied.deduplicated:
+        print("  (deduplicated: this idempotency key already carried the chain)")
     return 0
 
 
@@ -1341,6 +1418,19 @@ def _cmd_approval(args: argparse.Namespace) -> int:
     return dispatch_approval(args)
 
 
+def _cmd_workflow_template(args: argparse.Namespace) -> int:
+    """``hermes kanban workflow-template create|list|show`` (alias ``wf``) —
+    the template-management surface (governance stage 6, P1-A3).
+
+    Delegates to :func:`hermes_cli.kanban_workflows.dispatch_workflow_template`.
+    Applying a template rides on ``hermes kanban create --workflow-template``;
+    the worker tool exposes the same kernel via ``kanban_create``.
+    """
+    from hermes_cli.kanban_workflows import dispatch_workflow_template
+
+    return dispatch_workflow_template(args)
+
+
 def _cmd_watchdog(args: argparse.Namespace) -> int:
     """``hermes kanban watchdog create|list|show|rm|check|decide`` — the
     task-bound independent watchdog surface (governance stage 5).
@@ -1415,6 +1505,7 @@ _HANDLERS = {
     "context": _cmd_context, "specify": _cmd_specify, "decompose": _cmd_decompose,
     "gc": _cmd_gc, "budget": _cmd_budget, "approval": _cmd_approval,
     "watchdog": _cmd_watchdog,
+    "workflow-template": _cmd_workflow_template, "wf": _cmd_workflow_template,
     "project": _cmd_project, "inbox": _cmd_inbox, "block-sla": _cmd_block_sla,
 }
 

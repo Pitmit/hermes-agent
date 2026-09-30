@@ -738,6 +738,12 @@ def connect(db_path: Optional[Path] = None, *, board: Optional[str] = None) -> s
                 # no-op write on an already-backfilled board.
                 from hermes_cli.kanban_cost import backfill_run_costs
                 backfill_run_costs(conn, board=board)
+                # Workflow templates (governance stage 6, P1-A3): seed the
+                # five reference templates as data — idempotent per (board, id)
+                # via INSERT OR IGNORE, so legacy boards pick them up on their
+                # next connect and user-redefined reference ids are preserved.
+                from hermes_cli.kanban_workflows import ensure_reference_templates
+                ensure_reference_templates(conn, board=board)
 
         conn, _ = _open_configured(path, _init_if_needed)
     return conn

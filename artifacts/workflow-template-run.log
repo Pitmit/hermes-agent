@@ -1,0 +1,86 @@
+TEST_ROOT=/var/tmp/hermes-test.KU7JiV
+START_TS=2026-09-30T13:16:06Z
+FREE_BEFORE_KB=115939116
+VENV_IMPORT_OK editable: /home/hermes/.hermes/kanban/workspaces/hermes-kanban-governance/hermes_cli/kanban_workflows.py
+== SUITE NEW ==
+▶ not activated — using HERMES_PYTHON: /var/tmp/hermes-test.KU7JiV/venv/bin/python
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 1 test files (~19 tests) under ['tests/hermes_cli/test_kanban_workflows.py']; running with -j 8
+[100.0% |   19/~19 | ✓23 | ✗  0] ✓ tests/hermes_cli/test_kanban_workflows.py (23✓, 6.0s)
+
+=== Summary: 1 files, 23 tests passed, 0 failed (100% complete) in 6.0s (8 workers) ===
+  Durations cached to test_durations.json (1 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   1
+  Total subprocess CPU-wall: 6.0s  (runner wall: 6.0s, parallelism: 8x)
+  P50: 6.00s  P90: 6.00s  P95: 6.00s  P99: 6.00s  Max: 6.00s
+  <1s: 0 files (0%)  <2s: 0 files (0%)
+  Top 10 slowest:
+      6.00s  tests/hermes_cli/test_kanban_workflows.py
+SUITE_RC[NEW]=0
+== SUITE KANBAN ==
+▶ not activated — using HERMES_PYTHON: /var/tmp/hermes-test.KU7JiV/venv/bin/python
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 23 test files (~407 tests) under ['tests/hermes_cli/test_kanban_watchdog.py', 'tests/hermes_cli/test_kanban_approvals.py', 'tests/hermes_cli/test_kanban_inbox.py', 'tests/hermes_cli/test_kanban_blocked_sticky.py', 'tests/hermes_cli/test_kanban_block_kinds.py', 'tests/hermes_cli/test_kanban_review_lifecycle.py', 'tests/hermes_cli/test_kanban_review_surfaces.py', 'tests/hermes_cli/test_kanban_db.py', 'tests/hermes_cli/test_kanban_db_init.py', 'tests/hermes_cli/test_kanban_core_functionality.py', 'tests/hermes_cli/test_kanban_cli.py', 'tests/hermes_cli/test_kanban_boards.py', 'tests/hermes_cli/test_kanban_reclaim_claim_lock_guard.py', 'tests/hermes_cli/test_kanban_pr_acceptance.py', 'tests/hermes_cli/test_kanban_project_link.py', 'tests/hermes_cli/test_kanban_projects.py', 'tests/hermes_cli/test_kanban_cost_budget.py', 'tests/hermes_cli/test_config.py', 'tests/agent/test_kanban_lifecycle_loop_guard.py', 'tests/tools/test_kanban_tools.py', 'tests/tools/test_kanban_unknown_arguments.py', 'tests/tools/test_kanban_toolset_opt_in.py', 'tests/tools/test_kanban_redaction.py']; running with -j 8
+[  0.7% |     3/~407 | ✓3 | ✗0] ✓ tests/hermes_cli/test_kanban_blocked_sticky.py (3✓, 4.6s)
+[  3.4% |   14/~407 | ✓14 | ✗ 0] ✓ tests/agent/test_kanban_lifecycle_loop_guard.py (11✓, 5.6s)
+[  4.4% |   18/~407 | ✓18 | ✗  0] ✓ tests/hermes_cli/test_kanban_block_kinds.py (4✓, 5.8s)
+[  6.1% |   25/~407 | ✓25 | ✗  0] ✓ tests/hermes_cli/test_kanban_cli.py (7✓, 7.2s)
+[ 28.5% |  116/~407 | ✓193 | ✗  0] ✓ tests/hermes_cli/test_config.py (168✓ 4s, 8.8s)
+[ 29.7% |  121/~407 | ✓198 | ✗  0] ✓ tests/hermes_cli/test_kanban_db_init.py (5✓, 6.0s)
+[ 30.5% |  124/~407 | ✓201 | ✗  0] ✓ tests/hermes_cli/test_kanban_project_link.py (3✓, 3.4s)
+[ 33.9% |  138/~407 | ✓215 | ✗  0] ✓ tests/hermes_cli/test_kanban_cost_budget.py (14✓, 11.4s)
+[ 40.3% |  164/~407 | ✓250 | ✗  0] ✓ tests/hermes_cli/test_kanban_approvals.py (35✓, 16.6s)
+[ 45.7% |  186/~407 | ✓274 | ✗  0] ✓ tests/hermes_cli/test_kanban_core_functionality.py (24✓, 18.3s)
+[ 46.4% |  189/~407 | ✓277 | ✗  0] ✓ tests/hermes_cli/test_kanban_pr_acceptance.py (3✓, 11.3s)
+[ 46.9% |  191/~407 | ✓279 | ✗  0] ✓ tests/hermes_cli/test_kanban_reclaim_claim_lock_guard.py (2✓, 4.5s)
+[ 51.6% |  210/~407 | ✓298 | ✗  0] ✓ tests/hermes_cli/test_kanban_projects.py (19✓, 9.6s)
+[ 57.2% |  233/~407 | ✓321 | ✗  0] ✓ tests/hermes_cli/test_kanban_inbox.py (23✓, 18.7s)
+[ 59.2% |  241/~407 | ✓329 | ✗  0] ✓ tests/hermes_cli/test_kanban_review_surfaces.py (8✓, 8.1s)
+[ 60.4% |  246/~407 | ✓334 | ✗  0] ✓ tests/tools/test_kanban_redaction.py (5✓, 6.8s)
+[ 61.2% |  249/~407 | ✓337 | ✗  0] ✓ tests/tools/test_kanban_unknown_arguments.py (3✓, 3.9s)
+[ 64.4% |  262/~407 | ✓356 | ✗  0] ✓ tests/hermes_cli/test_kanban_boards.py (19✓, 32.2s)
+[ 70.0% |  285/~407 | ✓379 | ✗  0] ✓ tests/hermes_cli/test_kanban_watchdog.py (23✓, 12.3s)
+[ 75.9% |  309/~407 | ✓405 | ✗  0] ✓ tests/hermes_cli/test_kanban_review_lifecycle.py (26✓, 18.0s)
+[ 76.4% |  311/~407 | ✓410 | ✗  0] ✓ tests/tools/test_kanban_toolset_opt_in.py (5✓, 9.3s)
+[ 89.7% |  365/~407 | ✓470 | ✗  0] ✓ tests/hermes_cli/test_kanban_db.py (60✓ 1s, 31.7s)
+[100.0% |  407/~407 | ✓515 | ✗  0] ✓ tests/tools/test_kanban_tools.py (45✓, 24.0s)
+
+=== Summary: 23 files, 515 tests passed, 0 failed, 5 skipped (100% complete) in 48.8s (8 workers) ===
+
+  note: platforms('windows') tests (in 2 files) were SKIPPED on this host (linux); they run on the Windows Python-tests lane.
+  Durations cached to test_durations.json (23 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   23
+  Total subprocess CPU-wall: 277.9s  (runner wall: 48.8s, parallelism: 8x)
+  P50: 9.34s  P90: 23.97s  P95: 31.70s  P99: 32.17s  Max: 32.17s
+  <1s: 0 files (0%)  <2s: 0 files (0%)
+  Top 10 slowest:
+     32.17s  tests/hermes_cli/test_kanban_boards.py
+     31.70s  tests/hermes_cli/test_kanban_db.py
+     23.97s  tests/tools/test_kanban_tools.py
+     18.72s  tests/hermes_cli/test_kanban_inbox.py
+     18.27s  tests/hermes_cli/test_kanban_core_functionality.py
+     17.98s  tests/hermes_cli/test_kanban_review_lifecycle.py
+     16.55s  tests/hermes_cli/test_kanban_approvals.py
+     12.25s  tests/hermes_cli/test_kanban_watchdog.py
+     11.35s  tests/hermes_cli/test_kanban_cost_budget.py
+     11.33s  tests/hermes_cli/test_kanban_pr_acceptance.py
+SUITE_RC[KANBAN]=0
+== acceptance: no new tick/scheduler loop in the delta ==
+LOOP_GREP_RC=0 (0 = no added scheduler loop; new module is sleep-free)
+== git diff --check ==
+DIFFCHECK_RC=0
+END_TS=2026-09-30T13:17:08Z
+EXISTS_AFTER=no
+FREE_AFTER_KB=116700428
+HARNESS_DONE
+TRAP_CLEANUP_RAN=2026-09-30T13:17:08Z

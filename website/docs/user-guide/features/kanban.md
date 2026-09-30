@@ -1385,9 +1385,15 @@ Runs are exposed on the dashboard (Run History section in the drawer, one colour
 
 **Live drawer refresh.** When the dashboard's WebSocket event stream reports new events for the task the user is currently viewing, the drawer reloads itself (via a per-task event counter threaded into its `useEffect` dependency list). Closing and reopening is no longer required to see a run's new row or updated outcome.
 
-### Forward compatibility
+### Workflow templates
 
-Two nullable columns on `tasks` are reserved for v2 workflow routing: `workflow_template_id` (which template this task belongs to) and `current_step_key` (which step in that template is active). The v1 kernel ignores them for routing but lets clients write them, so a v2 release can add the routing machinery without another schema migration.
+Linear workflow chains are first-class: user-definable **templates** live in the board DB (`hermes kanban workflow-template create|list|show`, alias `wf`) as data — a JSON list of steps, each carrying a `step_key`, a title, an **assignee role** (not a concrete profile), and optionally forced `skills`, a `workspace`, `priority`, `review: true` or an `approval_type`. Five reference templates ship pre-seeded on every board (idempotently; redefining a reference id keeps your version): `research-synthesis-review`, `recon-implement-review`, `implement-publish-gate-approve-merge`, `incident-rca-repair-verify`, and `migration-recon-snapshot-execute-userpath-accept`.
+
+Applying a template (`hermes kanban create --workflow-template <id> --role ROLE=PROFILE …`, or the `kanban_create` tool with `workflow_template_id` + `roles`) creates the **whole step chain in one transaction**: one card per step, each parent-gated on its predecessor through the normal `task_links` promote gate — there is no separate routing engine, the parent gate IS the sequence. Every card is stamped with `workflow_template_id` and its `current_step_key`, and claiming a card stamps `task_runs.step_key` too.
+
+Validation is fail-closed **before anything is persisted**: every role must be mapped to an installed profile, forced skills must resolve in the assignee's own profile, and remote workspaces follow the same rules as a plain create (an SSH-backed assignee needs a scratch workspace or a path under the board's shared workspaces root, unless `remote_workspace_verified` is an honest probe result). A rejected application leaves no partial graph. An `idempotency_key` deduplicates the whole application — a retry reads the same chain back — and every application appends exactly one `workflow_applied` audit event on the first step's card.
+
+Steps with `review: true` or an `approval_type` carry that contract on the card body: the step card itself is the gate (the next step waits for its completion), and human decisions keep flowing through the existing review/approval surfaces — a template never approves anything on its own.
 
 ## Event reference
 
