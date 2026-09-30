@@ -1,0 +1,75 @@
+{
+  "task_id": "t_f6c0a047",
+  "review": "independent-hotfix-review",
+  "verdict": "GO",
+  "reviewer": "worker-spec",
+  "review_date": "2026-09-30",
+  "source": {
+    "workspace": "/home/hermes/.hermes/kanban/workspaces/kanban-lifecycle-hotfix",
+    "branch": "hotfix/kanban-lifecycle-loop-guard",
+    "reviewed_head": "b371923540aae46504846c7dafc9552ecd7ce72f",
+    "base": "bb0785e73b0154fcffb449c2f2319d7e49597c18",
+    "commit_message": "fix: harden kanban lifecycle tool completion loops",
+    "diff_scope": "8 files, +543/-24",
+    "commits_over_base": 1,
+    "base_on_pscs_stable": true,
+    "pscs_stable_head_at_review": "bb0785e73b0154fcffb449c2f2319d7e49597c18",
+    "cherry_pick_standalone": "PASS - hotfix branch is exactly pscs/stable + 1 commit; no governance-feature commit in rev-list; all referenced symbols (_UNDECLARED_ARGS, _goal_gate, _stamp_worker_session_metadata, _progress_since_failure, _decide) pre-exist at base; full test run executed against base+commit tree",
+    "source_fix_from_sentinel": "fa9812667feff62d29ea76c5cc28badbcf6cf2c3 (parent t_c92aafb1, feat/kanban-governance-p0)"
+  },
+  "gates": {
+    "schema_summary_required_no_autofill": {
+      "result": "PASS",
+      "evidence": "KANBAN_COMPLETE_SCHEMA: required=[] -> [\"summary\"] (diff base..head); 'result' property removed from model-facing schema and not advertised anywhere in schema text; handler _handle_complete rejects summary=None/whitespace-only with structured error, never falls back to result or invented text; 'result' still accepted as legacy arg via _UNDECLARED_ARGS['kanban_complete'] and stored as task.result only alongside a real summary (test_legacy_result_alongside_summary_is_stored green)"
+    },
+    "cli_result_compatibility": {
+      "result": "PASS",
+      "evidence": "hermes_cli/kanban.py::_cmd_complete calls kb.complete_task directly (result=args.result, summary=summary); CLI path never routes through _handle_complete, so 'hermes kanban complete --result' is unaffected by the diff"
+    },
+    "exact_faulty_form_repro": {
+      "result": "PASS",
+      "evidence": "test_message_3262_arg_form_is_rejected_and_card_not_done green against real temp-HERMES_HOME kernel DB; independently reproduced OLD handler behavior at base bb0785 in detached /tmp worktree: {artifacts, board} -> 'provide at least one of: summary (preferred), result', and result-only call COMPLETED the card at base (the old tolerance that caused the loop)"
+    },
+    "fourth_identical_call_blocked_pre_execution": {
+      "result": "PASS",
+      "evidence": "tests green incl. runtime wiring: test_runtime_fourth_identical_lifecycle_call_is_not_executed (handle_function_call never called, no tool start) and test_runtime_loop_halts_after_exactly_three_executions (mock_hfc.call_count==3 over 10 identical responses, turn_exit_reason=guardrail_halt, tool result contains lifecycle_identical_failure_block + 'NOT completed'); platform=cli config (hard_stop_enabled=False) reproduced in test_repro_observed_worker_config_platform_cli_still_blocks_lifecycle_replays; _decide('block') records the halt decision without any hard_stop gate, verified in source agent/tool_guardrails.py:361-371"
+    },
+    "changed_args_and_progress_not_blocked": {
+      "result": "PASS",
+      "evidence": "test_changed_lifecycle_args_are_never_blocked, test_successful_mutation_between_retries_resets_the_streak, test_successful_lifecycle_call_never_blocks_and_clears_counts, test_non_lifecycle_tools_keep_their_configured_thresholds all green; non-lifecycle tools: warn-only never blocks at 3, hard-stop still governed by exact_failure_block_after=5 (verified)"
+    },
+    "no_card_falsely_done_secret_safe_audit": {
+      "result": "PASS",
+      "evidence": "test_repeated_faulty_calls_never_complete_the_card: 19 identical faulty calls leave status=running, no result written; handler raises before any mutation; block/halt message is a fixed template (tool name + count + 'NOT completed'), no secrets; test_kanban_complete_result_field_scrubbed (updated) green for result-field redaction"
+    },
+    "standalone_cherry_pickable": {
+      "result": "PASS",
+      "evidence": "git merge-base --is-ancestor base pscs/stable = yes; pscs/stable HEAD == base at review time; git rev-list --count base..head = 1; git diff --check clean; all tests run against this exact tree"
+    }
+  },
+  "rca_verification": {
+    "schema_required_empty_at_base": "CONFIRMED - live diff shows required=[] at base, [\"summary\"] at head",
+    "platform_cli_hard_stop_false": "CONFIRMED in source - ToolCallGuardrailConfig.hard_stop_enabled default False, enabled only via non_interactive_hard_stop_enabled + _is_non_interactive_platform; cli in _ATTENDED_PLATFORMS; empirically: from_mapping({}, platform='cli').hard_stop_enabled == False",
+    "before_repro_10_of_10_allowed": "CONFIRMED empirically at base bb0785 (detached /tmp worktree, system python3): 10/10 identical failed kanban_complete calls allowed by before_call",
+    "unattended_blocks_at_attempt_6": "CONFIRMED empirically at base: platform='cron' -> hard_stop_enabled=True, exact_failure_block_after=5, block at attempt 6",
+    "old_handler_tolerance": "CONFIRMED empirically at base: result-only kanban_complete completed the card (status=done, result stored) - the tolerance the hotfix removes",
+    "persisted_glm_toolcalls_and_model_correlation": "VERIFIED VIA PARENT RECEIPT ONLY - receipt SHA256 matches exactly (20bf2754589696366ac2dff0ca6a1686fd53078e6990f8d7001e1b1a8962a22d, file intact); state-DB session 20260930_125842_db9c4c and worker-history forensics (GLM-5.3 51/68 vs worker-local 0/20, DeepSeek 0/7, Qwen 0/2) live on the orchestrator host, not reachable from VM125; all code-level RCA claims independently re-derived here are consistent with that forensics; the fix is defense-in-depth and does not depend on the model-correlation claim"
+  },
+  "tests": {
+    "runner": "VM125 existing runtime: system python3 (3.12) from the checkout + apt-installed light test deps (python3-pytest 7.4.4, python3-ruamel.yaml, python3-dotenv, python3-psutil, python3-yaml, python3-httpx); no heavy toolchain, no venv build",
+    "new_and_modified": "25/25 passed - tests/tools/test_kanban_complete_summary_required.py (9), tests/agent/test_kanban_lifecycle_loop_guard.py (11, incl. 2 full-loop runtime tests), tests/tools/test_kanban_redaction.py (5)",
+    "regression_sweep": "98/98 passed - tests/agent/test_tool_guardrails.py (20), tests/agent/test_tool_call_guardrail_runtime.py (15), tests/tools/test_kanban_tools.py (45), tests/agent/test_kanban_stop.py (8), tests/tools/test_kanban_complete_parents_tool.py (2), goal-judge-affinity + descendant-scope suites",
+    "pre_existing_failures_unrelated": "tests/agent/test_stall_guards.py (14) + tests/tools/test_delegate_kanban_isolation.py (1): 15 failed / 31 passed IDENTICALLY at base bb0785 (detached /tmp worktree, same runtime) and at reviewed head - proven pre-existing env-layout failures, not introduced by this diff; matches parent receipt finding"
+  },
+  "git_diff_check": "CLEAN",
+  "parent_receipt": {
+    "path": "/home/hermes/.hermes/kanban/workspaces/hermes-kanban-governance/artifacts/kanban-lifecycle-loop-guard-receipt.json",
+    "sha256": "20bf2754589696366ac2dff0ca6a1686fd53078e6990f8d7001e1b1a8962a22d",
+    "sha256_verified": true
+  },
+  "caveats_non_blocking": [
+    "Environment note: VM125 system python3 had no pytest/deps; installed the six light apt packages above. Unrelated plugin warnings (httpx before install, nemo_relay) and the SQLite 3.45.1 WAL-reset warning are environment-level, not part of this diff.",
+    "Untracked file .hotfix-sentinel (orchestrator marker: base_sha/branch/source_fix) is not part of the reviewed commit and was left untouched.",
+    "CLI parser help for --summary ('Falls back to --result if omitted') describes pre-existing CLI behavior; CLI surface unchanged by this diff and out of gate scope."
+  ]
+}
