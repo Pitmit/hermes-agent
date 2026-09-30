@@ -1,0 +1,554 @@
++ NODE_V=v22.23.3
+++ date -u +%H:%M:%SZ
++ echo '== FE: node download == (14:34:26Z)'
+== FE: node download == (14:34:26Z)
++ curl -fsSL --retry 3 -o /var/tmp/hermes-test.HgXyCs/node.tar.xz https://nodejs.org/dist/v22.23.3/node-v22.23.3-linux-x64.tar.xz
++ tar -xJf /var/tmp/hermes-test.HgXyCs/node.tar.xz -C /var/tmp/hermes-test.HgXyCs
++ export PATH=/var/tmp/hermes-test.HgXyCs/node-v22.23.3-linux-x64/bin:/var/tmp/fe-probe.rRpsNI/node-v22.23.3-linux-x64/bin:/var/tmp/fe-probe.rRpsNI/node-v22.23.3-linux-x64/bin:/var/tmp/fe-probe.rRpsNI/node-v22.23.3-linux-x64/bin:/var/tmp/fe-probe.rRpsNI/node-v22.23.3-linux-x64/bin:/var/tmp/fe-probe.rRpsNI/node-v22.23.3-linux-x64/bin:/var/tmp/fe-probe.rRpsNI/node-v22.23.3-linux-x64/bin:/var/tmp/fe-probe.rRpsNI/node-v22.23.3-linux-x64/bin:/var/tmp/fe-probe.rRpsNI/node-v22.23.3-linux-x64/bin:/var/tmp/fe-probe.rRpsNI/node-v22.23.3-linux-x64/bin:/var/tmp/fe-probe.rRpsNI/node-v22.23.3-linux-x64/bin:/var/tmp/fe-probe.rRpsNI/node-v22.23.3-linux-x64/bin:/var/tmp/fe-probe.rRpsNI/node-v22.23.3-linux-x64/bin:/var/tmp/fe-probe.rRpsNI/node-v22.23.3-linux-x64/bin:/var/tmp/fe-probe.rRpsNI/node-v22.23.3-linux-x64/bin:/var/tmp/fe-probe.rRpsNI/node-v22.23.3-linux-x64/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
++ PATH=/var/tmp/hermes-test.HgXyCs/node-v22.23.3-linux-x64/bin:/var/tmp/fe-probe.rRpsNI/node-v22.23.3-linux-x64/bin:/var/tmp/fe-probe.rRpsNI/node-v22.23.3-linux-x64/bin:/var/tmp/fe-probe.rRpsNI/node-v22.23.3-linux-x64/bin:/var/tmp/fe-probe.rRpsNI/node-v22.23.3-linux-x64/bin:/var/tmp/fe-probe.rRpsNI/node-v22.23.3-linux-x64/bin:/var/tmp/fe-probe.rRpsNI/node-v22.23.3-linux-x64/bin:/var/tmp/fe-probe.rRpsNI/node-v22.23.3-linux-x64/bin:/var/tmp/fe-probe.rRpsNI/node-v22.23.3-linux-x64/bin:/var/tmp/fe-probe.rRpsNI/node-v22.23.3-linux-x64/bin:/var/tmp/fe-probe.rRpsNI/node-v22.23.3-linux-x64/bin:/var/tmp/fe-probe.rRpsNI/node-v22.23.3-linux-x64/bin:/var/tmp/fe-probe.rRpsNI/node-v22.23.3-linux-x64/bin:/var/tmp/fe-probe.rRpsNI/node-v22.23.3-linux-x64/bin:/var/tmp/fe-probe.rRpsNI/node-v22.23.3-linux-x64/bin:/var/tmp/fe-probe.rRpsNI/node-v22.23.3-linux-x64/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
++ node --version
+v22.23.3
+++ date -u +%H:%M:%SZ
++ echo '== FE: stage tree == (14:34:28Z)'
+== FE: stage tree == (14:34:28Z)
++ mkdir -p /var/tmp/hermes-test.HgXyCs/fe
++ rsync -rR --exclude node_modules --exclude __pycache__ apps/shared web scripts/build package.json package-lock.json /var/tmp/hermes-test.HgXyCs/fe/
++ cd /var/tmp/hermes-test.HgXyCs/fe
+++ date -u +%H:%M:%SZ
++ echo '== FE: npm install (root: root devDeps carry the eslint toolchain) == (14:34:28Z)'
+== FE: npm install (root: root devDeps carry the eslint toolchain) == (14:34:28Z)
++ NPM_RC=0
++ npm install --no-audit --no-fund
+
+> hermes-agent@1.0.0 postinstall
+> echo '✅ Node dependencies installed. Run: python run_agent.py --help'
+
+✅ Node dependencies installed. Run: python run_agent.py --help
+
+added 496 packages in 7s
+npm notice
+npm notice New major version of npm available! 10.9.9 -> 12.1.0
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.1.0
+npm notice To update run: npm install -g npm@12.1.0
+npm notice
++ echo NPM_INSTALL_RC=0
+NPM_INSTALL_RC=0
++ '[' 0 -eq 0 ']'
++ cd /var/tmp/hermes-test.HgXyCs/fe/web
+++ date -u +%H:%M:%SZ
++ echo '== FE: typecheck (tsc -b --force) == (14:34:35Z)'
+== FE: typecheck (tsc -b --force) == (14:34:35Z)
++ TC_RC=0
++ npx tsc -b --force
++ echo TYPECHECK_RC=0
+TYPECHECK_RC=0
++ '[' 0 -eq 0 ']'
+++ date -u +%H:%M:%SZ
++ echo '== FE: typecheck negative control == (14:34:43Z)'
+== FE: typecheck negative control == (14:34:43Z)
++ NEG_RC=0
++ echo 'export const __probe_bad: number = "not a number";'
++ npx tsc -b --force
++ NEG_RC=2
++ sed -i '$ d' src/i18n/de.ts
++ echo 'TYPECHECK_NEGATIVE_CONTROL_RC=2 (expect nonzero — proves the gate is real)'
+TYPECHECK_NEGATIVE_CONTROL_RC=2 (expect nonzero — proves the gate is real)
++ '[' 2 -ne 0 ']'
++ TC2_RC=0
++ npx tsc -b --force
++ echo TYPECHECK_RESTORED_RC=0
+TYPECHECK_RESTORED_RC=0
++ '[' 0 -eq 0 ']'
+++ date -u +%H:%M:%SZ
++ echo '== FE: vitest == (14:34:58Z)'
+== FE: vitest == (14:34:58Z)
++ VT_RC=0
++ npm run test
+
+> web@0.0.0 test
+> vitest run
+
+(!) Your Vite config uses features that are unsupported by `configLoader: 'native'`, which is planned to become the default in a future major version of Vite:
+  - `__dirname` (vitest.config.ts:17:25). Use `import.meta.dirname` instead
+Set `VITE_CONFIG_NATIVE_IGNORE_WARNING=true` to suppress this warning.
+
+ RUN  v4.1.10 /var/tmp/hermes-test.HgXyCs/fe/web
+
+Not implemented: Window's open() method
+Not implemented: Window's open() method
+Not implemented: Window's open() method
+Not implemented: Window's open() method
+Not implemented: Window's open() method
+
+ Test Files  49 passed (49)
+      Tests  353 passed (353)
+   Start at  14:34:59
+   Duration  5.39s (transform 9.33s, setup 0ms, import 12.89s, tests 4.76s, environment 8.50s)
+
++ echo VITEST_RC=0
+VITEST_RC=0
++ echo 0
++ '[' 0 -eq 0 ']'
+++ date -u +%H:%M:%SZ
++ echo '== FE: eslint == (14:35:04Z)'
+== FE: eslint == (14:35:04Z)
++ LINT_RC=0
++ npm run lint
+
+> web@0.0.0 lint
+> eslint .
+
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/App.tsx
+  411:5  warning  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/App.tsx:411:5
+  409 |   const [chatHostMounted, setChatHostMounted] = useState(isChatRoute);
+  410 |   useEffect(() => {
+> 411 |     setChatHostMounted((prev) => latchChatActivation(prev, isChatRoute));
+      |     ^^^^^^^^^^^^^^^^^^ Avoid calling setState() directly within an effect
+  412 |   }, [isChatRoute]);
+  413 |
+  414 |   // `dashboard.show_token_analytics` gates the Analytics nav item.  The  react-hooks/set-state-in-effect
+  959:7  warning  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/App.tsx:959:7
+  957 |   useEffect(() => {
+  958 |     if (!updateConfirmOpen) {
+> 959 |       setUpdateConfirmInfo(null);
+      |       ^^^^^^^^^^^^^^^^^^^^ Avoid calling setState() directly within an effect
+  960 |       return;
+  961 |     }
+  962 |     let cancelled = false;                                                                                                                              react-hooks/set-state-in-effect
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/components/ChatSidebar.tsx
+  97:17  warning  Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components  react-refresh/only-export-components
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/components/LanguageSwitcher.tsx
+  106:36  warning  Error: Cannot access refs during render
+
+React refs are values that are not needed for rendering. Refs should only be accessed outside of render, such as in event handlers or effects. Accessing a ref value (the `current` property) during render can cause your component not to update as expected (https://react.dev/reference/react/useRef).
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/components/LanguageSwitcher.tsx:106:36
+  104 |       )}
+  105 |
+> 106 |       {open && !useMobileSheet && (() => {
+      |                                    ^^^^^^^
+> 107 |         const rect = containerRef.current?.getBoundingClientRect();
+      | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+> 108 |         const dropdown = (
+      …
+      | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+> 131 |         return dropUp ? createPortal(dropdown, document.body) : dropdown;
+      | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+> 132 |       })()}
+      | ^^^^^^^^ This function accesses a ref value
+  133 |     </div>
+  134 |   );
+  135 | }  react-hooks/refs
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/components/OAuthLoginModal.tsx
+  118:10  warning  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/components/OAuthLoginModal.tsx:118:10
+  116 |     if (secondsLeft !== 0) return;
+  117 |     if (phase === "approved" || phase === "error") return;
+> 118 |     void handleLocalExpiry();
+      |          ^^^^^^^^^^^^^^^^^ Avoid calling setState() directly within an effect
+  119 |     // eslint-disable-next-line react-hooks/exhaustive-deps
+  120 |   }, [secondsLeft, phase]);
+  121 |  react-hooks/set-state-in-effect
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/components/OAuthProvidersCard.tsx
+  63:3  warning  Error: Cannot access refs during render
+
+React refs are values that are not needed for rendering. Refs should only be accessed outside of render, such as in event handlers or effects. Accessing a ref value (the `current` property) during render can cause your component not to update as expected (https://react.dev/reference/react/useRef).
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/components/OAuthProvidersCard.tsx:63:3
+  61 |
+  62 |   const onErrorRef = useRef(onError);
+> 63 |   onErrorRef.current = onError;
+     |   ^^^^^^^^^^^^^^^^^^ Cannot update ref during render
+  64 |
+  65 |   const refresh = useCallback(() => {
+  66 |     setLoading(true);                                                                                                                                                                                                                                                                                                                                                            react-hooks/refs
+  75:5  warning  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/components/OAuthProvidersCard.tsx:75:5
+  73 |
+  74 |   useEffect(() => {
+> 75 |     refresh();
+     |     ^^^^^^^ Avoid calling setState() directly within an effect
+  76 |   }, [refresh]);
+  77 |
+  78 |   const handleDisconnect = async (provider: OAuthProvider) => {  react-hooks/set-state-in-effect
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/components/SidebarStatusStrip.tsx
+  52:17  warning  Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components  react-refresh/only-export-components
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/components/ThemeSwitcher.tsx
+  115:36  warning  Error: Cannot access refs during render
+
+React refs are values that are not needed for rendering. Refs should only be accessed outside of render, such as in event handlers or effects. Accessing a ref value (the `current` property) during render can cause your component not to update as expected (https://react.dev/reference/react/useRef).
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/components/ThemeSwitcher.tsx:115:36
+  113 |       )}
+  114 |
+> 115 |       {open && !useMobileSheet && (() => {
+      |                                    ^^^^^^^
+> 116 |         const rect = wrapperRef.current?.getBoundingClientRect();
+      | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+> 117 |         const dropdown = (
+      …
+      | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+> 155 |         return dropUp ? createPortal(dropdown, document.body) : dropdown;
+      | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+> 156 |       })()}
+      | ^^^^^^^^ This function accesses a ref value
+  157 |     </div>
+  158 |   );
+  159 | }  react-hooks/refs
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/contexts/ProfileProvider.tsx
+  66:7  warning  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/contexts/ProfileProvider.tsx:66:7
+  64 |     if (urlProfile !== null && urlProfile !== profile) {
+  65 |       setManagementProfile(urlProfile);
+> 66 |       setProfileState(urlProfile);
+     |       ^^^^^^^^^^^^^^^ Avoid calling setState() directly within an effect
+  67 |     }
+  68 |     // eslint-disable-next-line react-hooks/exhaustive-deps
+  69 |   }, [urlProfile]);  react-hooks/set-state-in-effect
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/i18n/context.tsx
+   46:14  warning  Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components  react-refresh/only-export-components
+  107:17  warning  Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components  react-refresh/only-export-components
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/pages/AnalyticsPage.tsx
+  482:5  warning  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/pages/AnalyticsPage.tsx:482:5
+  480 |
+  481 |   useEffect(() => {
+> 482 |     load();
+      |     ^^^^ Avoid calling setState() directly within an effect
+  483 |   }, [load]);
+  484 |
+  485 |   return (  react-hooks/set-state-in-effect
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/pages/ChannelsPage.tsx
+  687:7  warning  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/pages/ChannelsPage.tsx:687:7
+  685 |   useEffect(() => {
+  686 |     if (!setup && phase === "idle" && configuredMode) {
+> 687 |       setMode(configuredMode);
+      |       ^^^^^^^ Avoid calling setState() directly within an effect
+  688 |     }
+  689 |   }, [configuredMode, phase, setup]);
+  690 |  react-hooks/set-state-in-effect
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/pages/ChatPage.tsx
+   208:5  warning  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/pages/ChatPage.tsx:208:5
+  206 |   const [hasActivated, setHasActivated] = useState(isActive);
+  207 |   useEffect(() => {
+> 208 |     setHasActivated((prev) => latchChatActivation(prev, isActive));
+      |     ^^^^^^^^^^^^^^^ Avoid calling setState() directly within an effect
+  209 |   }, [isActive]);
+  210 |   const [searchParams, setSearchParams] = useSearchParams();
+  211 |   // Lazy-init: the missing-token check happens at construction so the effect  react-hooks/set-state-in-effect
+  1166:7  warning  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/pages/ChatPage.tsx:1166:7
+  1164 |     };
+  1165 |     if (resumeParam) {
+> 1166 |       setResumeHydrating(true);
+       |       ^^^^^^^^^^^^^^^^^^ Avoid calling setState() directly within an effect
+  1167 |       resumeMaxTimer = setTimeout(
+  1168 |         finishResumeHydration,
+  1169 |         PTY_RESUME_LOADING_MAX_MS,                                                                                                                                     react-hooks/set-state-in-effect
+  1648:6  warning  React Hook useEffect has missing dependencies: 'searchParams', 'setSearchParams', and 'terminalTheme'. Either include them or remove the dependency array                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             react-hooks/exhaustive-deps
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/pages/ConfigPage.tsx
+  209:7   warning  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/pages/ConfigPage.tsx:209:7
+  207 |   useEffect(() => {
+  208 |     if (categoryOrder.length > 0 && !activeCategory) {
+> 209 |       setActiveCategory(categoryOrder[0]);
+      |       ^^^^^^^^^^^^^^^^^ Avoid calling setState() directly within an effect
+  210 |     }
+  211 |   }, [categoryOrder, activeCategory]);
+  212 |  react-hooks/set-state-in-effect
+  216:7   warning  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/pages/ConfigPage.tsx:216:7
+  214 |   useEffect(() => {
+  215 |     if (yamlMode) {
+> 216 |       setYamlLoading(true);
+      |       ^^^^^^^^^^^^^^ Avoid calling setState() directly within an effect
+  217 |       api
+  218 |         .getConfigRaw()
+  219 |         .then((resp) => setYamlText(resp.yaml))                  react-hooks/set-state-in-effect
+  223:6   warning  React Hook useEffect has missing dependencies: 'showToast' and 't.config.failedToLoadRaw'. Either include them or remove the dependency array                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               react-hooks/exhaustive-deps
+  226:22  warning  Compilation Skipped: Existing memoization could not be preserved
+
+React Compiler has skipped optimizing this component because the existing manual memoization could not be preserved. This value was memoized in source but not in compilation output.
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/pages/ConfigPage.tsx:226:22
+  224 |
+  225 |   /* ---- Categories ---- */
+> 226 |   const categories = useMemo(() => {
+      |                      ^^^^^^^^^^^^^^^
+> 227 |     if (!schema) return [];
+      | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+> 228 |     const allCats = [
+      …
+      | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+> 235 |     return [...ordered, ...extra];
+      | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+> 236 |   }, [schema, categoryOrder]);
+      | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Could not preserve existing memoization
+  237 |
+  238 |   /* ---- Category field counts ---- */
+  239 |   const categoryCounts = useMemo(() => {                                                                                                                                                          react-hooks/preserve-manual-memoization
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/pages/LogsPage.tsx
+  151:5  warning  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/pages/LogsPage.tsx:151:5
+  149 |
+  150 |   useEffect(() => {
+> 151 |     fetchLogs();
+      |     ^^^^^^^^^ Avoid calling setState() directly within an effect
+  152 |   }, [fetchLogs]);
+  153 |
+  154 |   useEffect(() => {  react-hooks/set-state-in-effect
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/pages/ModelsPage.tsx
+  1222:5  warning  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/pages/ModelsPage.tsx:1222:5
+  1220 |
+  1221 |   useEffect(() => {
+> 1222 |     load();
+       |     ^^^^ Avoid calling setState() directly within an effect
+  1223 |   }, [load]);
+  1224 |
+  1225 |   // Model assignments can change outside this page (config editor, chat  react-hooks/set-state-in-effect
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/pages/SkillsPage.tsx
+  1391:5  warning  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/pages/SkillsPage.tsx:1391:5
+  1389 |   useEffect(() => {
+  1390 |     let cancelled = false;
+> 1391 |     setPreviewLoading(true);
+       |     ^^^^^^^^^^^^^^^^^ Avoid calling setState() directly within an effect
+  1392 |     api
+  1393 |       .previewSkillFromHub(result.identifier)
+  1394 |       .then((p) => !cancelled && setPreview(p))  react-hooks/set-state-in-effect
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/plugins/PluginPage.tsx
+  29:13  warning  Error: Cannot create components during render
+
+Components created during render will reset their state each time they are created. Declare components outside of render.
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/plugins/PluginPage.tsx:29:13
+  27 |
+  28 |   if (Component) {
+> 29 |     return <Component />;
+     |             ^^^^^^^^^ This component is created during render
+  30 |   }
+  31 |
+  32 |   if (loadError) {
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/plugins/PluginPage.tsx:17:21
+  15 |   // Subscribe in render (via useSyncExternalStore) so we never miss
+  16 |   // `register()` if the script loads before a useEffect would run.
+> 17 |   const Component = useSyncExternalStore(
+     |                     ^^^^^^^^^^^^^^^^^^^^^
+> 18 |     (onChange) => onPluginRegistered(onChange),
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+> 19 |     () => getPluginComponent(name) ?? null,
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+> 20 |     () => null,
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+> 21 |   );
+     | ^^^^ The component is created during render here
+  22 |   const loadError = useSyncExternalStore(
+  23 |     (onChange) => onPluginRegistered(onChange),
+  24 |     () => getPluginLoadError(name) ?? null,  react-hooks/static-components
+
+/var/tmp/hermes-test.HgXyCs/fe/web/src/themes/context.tsx
+  586:17  warning  Fast refresh only works when a file only exports components. Use a new file to share constants or functions between components  react-refresh/only-export-components
+
+✖ 26 problems (0 errors, 26 warnings)
+
++ echo LINT_RC=0
+LINT_RC=0
++ echo 0
++ '[' 0 -eq 0 ']'
+++ date -u +%H:%M:%SZ
++ echo '== FE: SPA build == (14:35:20Z)'
+== FE: SPA build == (14:35:20Z)
++ BUILD_RC=0
++ npm run build
+
+> web@0.0.0 build
+> node ../scripts/build/web.mjs
+
+vite v8.2.0 building client environment for production...
+[2Ktransforming...✓ 2251 modules transformed.
+rendering chunks...
+computing gzip size...
+../hermes_cli/.web_dist-build-2EmvFz/product/index.html                                       1.50 kB │ gzip:   0.54 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/Mondwest-Regular-CWscgue7.woff2          23.82 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/RulesExpanded-Regular-l8uVympt.woff2     33.82 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/RulesExpanded-Bold-DZA7s8Pa.woff2        35.01 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/RulesCompressed-Regular-BSXFyF4x.woff2   37.76 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/RulesCompressed-Medium-CA76_CrB.woff2    38.84 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/Collapse-Bold-mgICk9-_.woff2             59.14 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/Collapse-Regular-DysayoTY.woff2          62.81 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/xterm-BrP-ENHg.css                        3.93 kB │ gzip:   1.01 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/index-CVz44OD6.css                      112.46 kB │ gzip:  17.61 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/chat-activation-BiaqYo9D.js               0.04 kB │ gzip:   0.06 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/page-header-context-Cv8A-rTa.js           0.15 kB │ gzip:   0.14 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/useProfileScope-CZ2qacRL.js               0.26 kB │ gzip:   0.21 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/usePageHeader-BtGwRGnc.js                 0.30 kB │ gzip:   0.23 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/utils-DYyongUp.js                         0.53 kB │ gzip:   0.29 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/rolldown-runtime-CbXtAM7H.js              0.58 kB │ gzip:   0.36 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/DeleteConfirmDialog-BEBnLt0T.js           0.61 kB │ gzip:   0.37 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/useModalBehavior-oWox1GPh.js              0.62 kB │ gzip:   0.39 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/clipboard-owkvc3zk.js                     0.73 kB │ gzip:   0.44 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/terminal-font-refit-Dmois6_8.js           0.83 kB │ gzip:   0.44 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/mcp-server-create-B0VgoYzF.js             0.92 kB │ gzip:   0.46 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/LoadErrorNotice-DUcIPS45.js               1.74 kB │ gzip:   0.90 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/DocsPage-HSd0yUdy.js                      1.96 kB │ gzip:   1.08 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/PairingPage-H9FbTDRT.js                   4.88 kB │ gzip:   1.67 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/plugins-DT4Ket3N.js                       5.55 kB │ gzip:   2.61 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/LogsPage-Cz4Fx-WK.js                      7.50 kB │ gzip:   3.29 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/FilesPage-B8nDQVX0.js                     9.81 kB │ gzip:   3.26 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/WebhooksPage-CRXZAsPo.js                 12.59 kB │ gzip:   3.85 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/themes-BpGZYoHQ.js                       12.99 kB │ gzip:   4.39 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/ModelReloadConfirm-kH32fgeA.js           13.95 kB │ gzip:   5.15 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/ProfileBuilderPage-tmnsKpet.js           14.87 kB │ gzip:   4.50 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/McpPage-JLAqX5dK.js                      17.82 kB │ gzip:   5.22 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/ConfigPage-BzcP587B.js                   18.00 kB │ gzip:   6.02 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/AnalyticsPage-DzedGmwG.js                20.17 kB │ gzip:   6.04 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/ProfilesPage-CWcRA53c.js                 25.27 kB │ gzip:   7.11 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/ChannelsPage-B9wRS4y8.js                 29.19 kB │ gzip:   8.10 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/EnvPage-1T8dP0Jq.js                      29.76 kB │ gzip:   7.97 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/ModelsPage-C2GDo-P1.js                   33.98 kB │ gzip:  10.52 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/PluginsPage-MQgfvnAB.js                  34.08 kB │ gzip:   9.90 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/SystemPage-C78BYXm0.js                   43.11 kB │ gzip:  11.63 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/SkillsPage-QQclMouS.js                   44.70 kB │ gzip:  12.63 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/CronPage-BFyhC5oP.js                     45.43 kB │ gzip:  14.67 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/SessionsPage-CMV73EDw.js                 46.42 kB │ gzip:  14.20 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/api-xvjTxPQj.js                          47.88 kB │ gzip:  12.30 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/vendor-C3j-S1CW.js                       50.37 kB │ gzip:  17.89 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/ChatPage-D2nuUjP5.js                     52.28 kB │ gzip:  18.29 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/index-BniTKY-X.js                        68.15 kB │ gzip:  23.46 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/react-vendor-BoVnYuL4.js                226.99 kB │ gzip:  72.78 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/ui-bBVPPEcD.js                          290.19 kB │ gzip:  94.89 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/xterm-CXxU4Y2B.js                       474.38 kB │ gzip: 122.64 kB
+../hermes_cli/.web_dist-build-2EmvFz/product/assets/i18n-BYmsop_9.js                        492.75 kB │ gzip: 146.31 kB
+
+[33m[PLUGIN_TIMINGS] [0mYour build spent significant time in plugin `@rolldown/plugin-babel`. See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details.
+
+✓ built in 6.96s
+built /var/tmp/hermes-test.HgXyCs/fe/hermes_cli/web_dist/index.html
++ echo WEB_BUILD_RC=0
+WEB_BUILD_RC=0
++ echo 0
++ '[' 0 -eq 0 ']'
++ '[' -f /var/tmp/hermes-test.HgXyCs/fe/hermes_cli/web_dist/index.html ']'
++ echo 'FE_PHASE_DONE rc=0'
+FE_PHASE_DONE rc=0

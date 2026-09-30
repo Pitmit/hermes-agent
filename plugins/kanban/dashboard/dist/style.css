@@ -1618,3 +1618,345 @@
 .hermes-kanban-trash-label {
   font-weight: 500;
 }
+
+/* ---- Governance panel (P1-B2) ------------------------------------------ */
+
+.hermes-kanban-gov-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.hermes-kanban-gov-tabs {
+  display: flex;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 0.5rem;
+}
+
+.hermes-kanban-gov-tab {
+  appearance: none;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius, 6px);
+  color: var(--color-muted-foreground);
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 0.25rem 0.55rem;
+  white-space: nowrap;
+}
+.hermes-kanban-gov-tab:hover { color: var(--color-foreground); }
+.hermes-kanban-gov-tab--active {
+  border-color: var(--color-border);
+  background: color-mix(in srgb, var(--color-card) 70%, var(--color-foreground) 6%);
+  color: var(--color-foreground);
+  font-weight: 500;
+}
+
+.hermes-kanban-gov-view,
+.hermes-kanban-gov-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.hermes-kanban-gov-filters {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.hermes-kanban-gov-sections {
+  display: grid;
+  gap: 1rem;
+}
+@media (min-width: 1024px) {
+  .hermes-kanban-gov-sections { grid-template-columns: 1fr 1fr; }
+}
+
+.hermes-kanban-gov-section,
+.hermes-kanban-gov-section-head,
+.hermes-kanban-gov-subhead {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.hermes-kanban-gov-section-head,
+.hermes-kanban-gov-subhead {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+.hermes-kanban-gov-subhead {
+  font-size: 0.7rem;
+  font-weight: 400;
+  color: var(--color-muted-foreground);
+  padding-top: 0.25rem;
+  border-top: 1px dashed var(--color-border);
+}
+
+/* Generic governance card: one row-like block per approval / inbox entry /
+   budget / run. Head = identity + badges, body = free-text details. */
+.hermes-kanban-gov-card {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius, 6px);
+  background: color-mix(in srgb, var(--color-card) 85%, transparent);
+  padding: 0.5rem 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.hermes-kanban-gov-card-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.hermes-kanban-gov-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.hermes-kanban-gov-id {
+  font-size: 0.7rem;
+  color: var(--color-muted-foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hermes-kanban-gov-title {
+  font-size: 0.8rem;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
+}
+
+.hermes-kanban-gov-link {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: var(--color-primary, #6ea8fe);
+  cursor: pointer;
+  font-size: 0.75rem;
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.hermes-kanban-gov-link:hover { text-decoration: underline; }
+
+.hermes-kanban-gov-ago {
+  margin-left: auto;
+  font-size: 0.65rem;
+  color: var(--color-muted-foreground);
+  white-space: nowrap;
+}
+
+.hermes-kanban-gov-scope {
+  font-size: 0.75rem;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hermes-kanban-gov-note-text {
+  font-size: 0.7rem;
+  color: var(--color-muted-foreground);
+  overflow-wrap: anywhere;
+}
+
+.hermes-kanban-gov-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.hermes-kanban-gov-meta {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.hermes-kanban-gov-pill {
+  display: inline-block;
+  border-radius: 9999px;
+  border: 1px solid var(--color-border);
+  font-size: 0.65rem;
+  line-height: 1.4;
+  padding: 0.05rem 0.45rem;
+  white-space: nowrap;
+}
+
+/* Severity pills */
+.hermes-kanban-gov-sev--critical {
+  border-color: color-mix(in srgb, var(--color-destructive, #d14a4a) 50%, transparent);
+  background: color-mix(in srgb, var(--color-destructive, #d14a4a) 14%, transparent);
+  color: var(--color-destructive, #d14a4a);
+  font-weight: 600;
+}
+.hermes-kanban-gov-sev--high {
+  border-color: color-mix(in srgb, #e08c3a 50%, transparent);
+  background: color-mix(in srgb, #e08c3a 12%, transparent);
+  color: #b06f28;
+}
+.hermes-kanban-gov-sev--medium {
+  border-color: color-mix(in srgb, #c9b03a 50%, transparent);
+  background: color-mix(in srgb, #c9b03a 12%, transparent);
+  color: #967f1f;
+}
+.hermes-kanban-gov-sev--low {
+  color: var(--color-muted-foreground);
+}
+
+/* Budget states + approval statuses */
+.hermes-kanban-gov-state--ok {
+  color: #2e9e63;
+}
+.hermes-kanban-gov-state--warn {
+  border-color: color-mix(in srgb, #e08c3a 50%, transparent);
+  background: color-mix(in srgb, #e08c3a 12%, transparent);
+  color: #b06f28;
+}
+.hermes-kanban-gov-state--stopped {
+  border-color: color-mix(in srgb, var(--color-destructive, #d14a4a) 50%, transparent);
+  background: color-mix(in srgb, var(--color-destructive, #d14a4a) 14%, transparent);
+  color: var(--color-destructive, #d14a4a);
+  font-weight: 600;
+}
+.hermes-kanban-gov-ap--pending {
+  border-color: color-mix(in srgb, var(--color-primary, #6ea8fe) 50%, transparent);
+  background: color-mix(in srgb, var(--color-primary, #6ea8fe) 12%, transparent);
+  color: var(--color-primary, #6ea8fe);
+}
+.hermes-kanban-gov-ap--revision {
+  border-color: color-mix(in srgb, #c9b03a 50%, transparent);
+  background: color-mix(in srgb, #c9b03a 12%, transparent);
+  color: #967f1f;
+}
+.hermes-kanban-gov-ap--approved { color: #2e9e63; }
+.hermes-kanban-gov-ap--rejected { color: var(--color-destructive, #d14a4a); }
+.hermes-kanban-gov-ap--invalidated { color: var(--color-muted-foreground); }
+
+/* SLA badge */
+.hermes-kanban-gov-sla {
+  font-size: 0.65rem;
+  white-space: nowrap;
+}
+.hermes-kanban-gov-sla--ok { color: var(--color-muted-foreground); }
+.hermes-kanban-gov-sla--near { color: #b06f28; font-weight: 500; }
+.hermes-kanban-gov-sla--over { color: var(--color-destructive, #d14a4a); font-weight: 600; }
+
+/* Stat tiles + progress bars */
+.hermes-kanban-gov-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.5rem;
+}
+.hermes-kanban-gov-stat {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius, 6px);
+  padding: 0.4rem 0.55rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+.hermes-kanban-gov-stat-label {
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-muted-foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hermes-kanban-gov-stat-value {
+  font-size: 0.85rem;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hermes-kanban-gov-bar {
+  height: 4px;
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--color-muted-foreground) 20%, transparent);
+  overflow: hidden;
+}
+.hermes-kanban-gov-bar-fill {
+  height: 100%;
+  border-radius: 9999px;
+  background: var(--color-primary, #6ea8fe);
+  transition: width 300ms ease;
+}
+.hermes-kanban-gov-bar-fill--warn { background: #e08c3a; }
+.hermes-kanban-gov-bar-fill--stopped { background: var(--color-destructive, #d14a4a); }
+
+.hermes-kanban-gov-progress-line {
+  font-size: 0.7rem;
+  color: var(--color-muted-foreground);
+  overflow-wrap: anywhere;
+}
+.hermes-kanban-gov-progress-line--unknown { font-style: italic; }
+
+.hermes-kanban-gov-rollup {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+/* Responsive minimum (governance P1-B2): inbox / approval / run cards stack
+   cleanly on narrow viewports — the tab strip scrolls horizontally, action
+   buttons go full width, and long ids/links keep their ellipsis. No separate
+   phone app; this is the smallest rule set that keeps the operator views
+   usable down to ~360px. */
+@media (max-width: 720px) {
+  .hermes-kanban-gov-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+  }
+  .hermes-kanban-gov-card-head {
+    flex-wrap: wrap;
+  }
+  .hermes-kanban-gov-ago {
+    margin-left: 0;
+    width: 100%;
+    text-align: left;
+  }
+  .hermes-kanban-gov-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .hermes-kanban-gov-actions button,
+  .hermes-kanban-gov-actions input {
+    width: 100%;
+  }
+  .hermes-kanban-gov-sections {
+    grid-template-columns: 1fr;
+  }
+  .hermes-kanban-gov-title {
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+}

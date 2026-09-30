@@ -786,8 +786,24 @@ hermes dashboard        # "Kanban" tab appears in the nav, after "Skills"
   - **Status action row** (→ triage / → ready / → running / block / unblock / complete / archive) with confirm prompts for destructive transitions. For cards in the **Triage** column the row also exposes two LLM-driven actions: **⚗ Decompose** fans the task out into a graph of child tasks routed to specialist profiles by description, and **✨ Specify** does a single-task spec rewrite. Decompose falls back to specify-style promotion when the LLM decides the task doesn't benefit from fan-out, so it's a strict superset. Both are reachable from the CLI (`hermes kanban decompose <id>` / `specify <id>` / `--all`), from any gateway platform (`/kanban decompose <id>`), and programmatically via `POST /api/plugins/kanban/tasks/:id/decompose` and `…/specify`. Configure the models under `auxiliary.kanban_decomposer` and `auxiliary.triage_specifier` in `config.yaml`.
   - Result section (also markdown-rendered), comment thread with Enter-to-submit, the last 20 events.
 - **Toolbar filters** — free-text search, tenant dropdown (defaults to `dashboard.kanban.default_tenant` from `config.yaml`), assignee dropdown, "show archived" toggle, "lanes by profile" toggle, and a **Nudge dispatcher** button so you don't have to wait for the next 60 s tick.
+- **Governance panel** — a collapsible operator section (see below) for budgets & costs, pending approvals, the blocked inbox, project rollups, watchdog/workflow status, and live run progress.
 
 Visually the target is the familiar Linear / Fusion layout: dark theme, column headers with counts, coloured status dots, pill chips for priority and tenant. The plugin reads only theme CSS vars (`--color-*`, `--radius`, `--font-mono`, ...), so it reskins automatically with whichever dashboard theme is active.
+
+### Governance panel
+
+Below the Orchestration panel, a collapsed **▸ Governance** link expands into the operator surface for the board's governance kernels. It is read-mostly: the only write is the human approval decision — every other governance action (setting budgets, requesting approvals, creating watchdogs, applying workflow templates) keeps flowing through the CLI / worker tools exactly as before, so the plugin cannot drift from their semantics. The panel is board-aware (follows the board switcher), polls on a gentle 15 s interval *only while expanded* (the board's WebSocket stream and reload cadence are untouched), and the card layouts collapse responsively for narrow viewports — the same tab strip works on a tablet without a separate phone app. Fully translated (DE/EN; every label falls back to its English literal).
+
+Six tabs:
+
+- **Approvals** — every approval request of the board, newest first, with the subject (task subjects link straight into the task drawer), requester, request note and status pill. A *pending* or *revision_requested* row offers the three human decisions — **Approve / Request revision / Reject** with an optional note — which POST to the same `decide` kernel the CLI uses. Every kernel fence applies unchanged: a drifted subject surfaces as `invalidated` and cannot be decided (409), self-approval is refused (403), a dispatched-worker context can never decide (403), and a double-click is answered with the row's current state (409 already-decided), never a second decision. `approve` releases exactly the tasks bound by `approval:<id>`.
+- **Blocked Inbox** — blocked tasks, pending approvals and open reviews in one deterministic order: severity (critical > high > medium > low) first, then age, with per-row SLA hours and action owner. Server-side severity/source filters are inclusive and fail closed; the client sorts a local copy the same way for instant re-sorting.
+- **Budget & Costs** — per-scope budget rows (board / tenant / project / profile) with MTD known spend, limit, warning ratio and state (`ok` / `warn` / `stopped`), plus the board-month usage stats. Runs without a measured cost surface as an explicit "unknown" count — they are never reinterpreted as $0.
+- **Running Progress** — every running task with its structured heartbeat progress: phase, percent, completed/total with unit, rate, ETA and error count. Unknown values render as "ETA unknown" and similar explicit markers — never an invented estimate — and the payload comes from the activity snapshot's bounded, secret-redacted allowlist, so worker pids, claim locks, run metadata, task bodies and results never reach the browser.
+- **Watchdog & Workflows** — active and historical watchdogs with reviewer/instructions, the recent firing ledger (undecided firings first), and the board's validated workflow templates. The panel never fires a check; checks run on the dispatcher tick or `hermes kanban watchdog check`.
+- **Projects** — pick a project for a read-only rollup: task status counts, done ratio, known MTD costs, the governing budget and the project goal. Unknown project references are refused.
+
+CLI parity: everything the panel shows is also on the CLI — `hermes kanban budget set/list/rm`, `hermes kanban approval request/list/decide`, the blocked inbox, `hermes kanban watchdog list/show`, and the project rollup verbs. The panel is the comfortable human view over the same kernels, not a second governance engine.
 
 ### Auto vs Manual orchestration
 
@@ -883,6 +899,15 @@ All routes are mounted under `/api/plugins/kanban/` and protected by the dashboa
 | `DELETE` | `/links?parent_id=…&child_id=…` | Remove a dependency |
 | `POST` | `/dispatch?max=…&dry_run=…` | Nudge the dispatcher — skip the 60 s wait |
 | `GET` | `/config` | Read `dashboard.kanban` preferences from `config.yaml` — `default_tenant`, `lane_by_profile`, `include_archived_by_default`, `render_markdown` |
+| `GET` | `/governance/budget?period=YYYY-MM` | Cost/budget status of the board's current (or given) month: per-scope rows (board / tenant / project / profile) with MTD, limit, warn ratio, state, plus usage stats. Malformed period → 400 |
+| `GET` | `/governance/approvals?status=…&type=…` | All approvals of the board, newest first; open rows are drift-checked on read (a changed subject surfaces `invalidated`) |
+| `GET` | `/governance/approvals/:id` | One approval (drift-checked when open); another board's row is 404 |
+| `POST` | `/governance/approvals/:id/decide` | The human decision — `approve` / `reject` / `revise` (+ optional note, `via: dashboard`). Kernel fences intact: worker contexts 403, self-approval 403, drift 409 with the request invalidated, double decision 409 |
+| `GET` | `/governance/inbox?severity=…&source=…&block_kind=…&limit=…` | The blocked inbox — blocked tasks + pending approvals + open reviews, ordered severity desc → age desc, with SLA bands; filters fail closed (400 on unknown values) |
+| `GET` | `/governance/projects/rollup?project_id=…` | Read-only rollup of one project: statuses, progress, known MTD costs, governing budget + goal; unknown project → 400 |
+| `GET` | `/governance/watchdogs?status=…` | Watchdog rows (reviewer/instructions) + recent firing ledger + `enabled` flag; never fires a check |
+| `GET` | `/governance/workflows` | The board's validated workflow templates (roles, not concrete profiles); read-only |
+| `GET` | `/governance/progress` | Running tasks with structured progress (phase / percent / rate / ETA), projected through the bounded, secret-redacted activity allowlist; unknown fields stay `null` |
 | `WS` | `/events?since=<event_id>` | Live stream of `task_events` rows. Without `since` the stream starts at the board's current tail (the `/board` snapshot already holds the past); pass `since=<latest_event_id>` to catch up from there, or `since=0` to replay history |
 
 Every handler is a thin wrapper — the plugin is ~700 lines of Python (router + WebSocket tail + bulk batcher + config reader) and adds no new business logic. A tiny `_conn()` helper auto-initializes `kanban.db` on every read and write, so a fresh install works whether the user opened the dashboard first, hit the REST API directly, or ran `hermes kanban init`.
@@ -924,7 +949,7 @@ To disable without removing: add `dashboard.plugins.kanban.enabled: false` to `c
 
 ### Scope boundary
 
-The GUI is deliberately thin. Everything the plugin does is reachable from the CLI; the plugin just makes it comfortable for humans. Auto-assignment, budgets, governance gates, and org-chart views remain user-space — a router profile, another plugin, or a reuse of `tools/approval.py` — exactly as listed in the out-of-scope section of the design spec.
+The GUI is deliberately thin. Everything the plugin does is reachable from the CLI; the plugin just makes it comfortable for humans. The governance panel follows the same rule: it renders and decides through the governance kernels (`kanban_approvals`, `kanban_cost`, `kanban_inbox`, `kanban_projects`, `kanban_watchdog`, `kanban_workflows`) rather than re-implementing any gate — budget enforcement, approval requests and watchdog creation stay on the CLI / worker surfaces. Auto-assignment and org-chart views remain user-space — a router profile, another plugin, or a reuse of `tools/approval.py`.
 
 ## CLI command reference
 

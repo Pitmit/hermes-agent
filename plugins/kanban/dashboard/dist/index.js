@@ -313,6 +313,111 @@
     return `${url}${sep}board=${encodeURIComponent(board)}`;
   }
 
+  // -------------------------------------------------------------------------
+  // Governance (P1-B2) — pure helpers. Kept top-level and side-effect-free so
+  // the behavioral probe (tests/plugins/fixtures/kanban_governance_probe.js)
+  // can extract and drive them exactly as the bundle ships them.
+  // -------------------------------------------------------------------------
+
+  // Same total order the backend's blocked inbox applies: severity desc,
+  // age desc (unknown ages last), ref asc as the final tiebreak.
+  const GOV_SEVERITY_ORDER = ["low", "medium", "high", "critical"];
+  const GOV_SEVERITY_CLASSES = {
+    critical: "hermes-kanban-gov-sev--critical",
+    high: "hermes-kanban-gov-sev--high",
+    medium: "hermes-kanban-gov-sev--medium",
+    low: "hermes-kanban-gov-sev--low",
+  };
+
+  function govSeverityRank(severity) {
+    const idx = GOV_SEVERITY_ORDER.indexOf(String(severity || "").toLowerCase());
+    return idx === -1 ? -1 : idx;
+  }
+
+  function govSeverityClass(severity) {
+    const key = String(severity || "").toLowerCase();
+    return GOV_SEVERITY_CLASSES[key] || GOV_SEVERITY_CLASSES.low;
+  }
+
+  function govSortInboxRows(rows) {
+    // Re-applied locally so the inbox view stays correctly ordered even if
+    // rows ever arrive out of order (cached fetch, merge, future pagination).
+    return (rows || []).slice().sort(function (a, b) {
+      const ra = govSeverityRank(a && a.severity);
+      const rb = govSeverityRank(b && b.severity);
+      if (ra !== rb) return rb - ra;
+      const aa = a && a.age_seconds != null ? a.age_seconds : -1;
+      const bb = b && b.age_seconds != null ? b.age_seconds : -1;
+      if (aa !== bb) return bb - aa;
+      return String((a && a.ref) || "").localeCompare(String((b && b.ref) || ""));
+    });
+  }
+
+  // Only OPEN requests are decidable. A drifted subject surfaces as
+  // 'invalidated' (the list drift-checks on read) and a decided row carries
+  // its terminal status — both keep the decision buttons honest; the server
+  // re-checks every fence on decide regardless.
+  const GOV_OPEN_APPROVAL_STATUSES = ["pending", "revision_requested"];
+
+  function govDecisionEnabled(status) {
+    return GOV_OPEN_APPROVAL_STATUSES.indexOf(String(status || "")) !== -1;
+  }
+
+  function govBeginDecision(busy, approvalId) {
+    // In-flight fence for decision clicks: returns the NEXT busy map when the
+    // decision may start, or null when one is already running for this id.
+    // A double click therefore posts exactly one decision; the second is a
+    // local no-op, and the server's 409 ("already decided") is the final word.
+    const map = busy || {};
+    if (map[approvalId]) return null;
+    const next = Object.assign({}, map);
+    next[approvalId] = true;
+    return next;
+  }
+
+  function govFmtEta(secs) {
+    if (secs == null || !isFinite(secs) || secs < 0) return null;
+    if (secs < 60) return `${Math.round(secs)}s`;
+    if (secs < 3600) return `${Math.round(secs / 60)}m`;
+    return `${(secs / 3600).toFixed(1)}h`;
+  }
+
+  function govProgressParts(run, t) {
+    // Structured progress of the last kanban_heartbeat, as display parts.
+    // Unknown values are NEVER invented: a run without structured progress
+    // renders nothing at all, and a missing ETA renders the explicit
+    // "ETA unknown" marker instead of an estimate.
+    if (!run || run.progress_pct == null) return null;
+    const parts = [];
+    if (run.phase) parts.push(String(run.phase));
+    parts.push(`${run.progress_pct}%`);
+    if (run.total != null && run.total > 0 && run.completed != null) {
+      parts.push(`(${run.completed}/${run.total}${run.unit ? " " + run.unit : ""})`);
+    }
+    if (run.rate != null && isFinite(run.rate) && run.rate > 0) {
+      const shown = run.rate >= 10 ? Math.round(run.rate) : Math.round(run.rate * 10) / 10;
+      parts.push(tx(t, "gov.ratePerHour", "{rate}/h", { rate: String(shown) }));
+    }
+    const eta = govFmtEta(run.eta_seconds);
+    parts.push(eta
+      ? tx(t, "gov.etaIn", "ETA {eta}", { eta })
+      : tx(t, "gov.etaUnknown", "ETA unknown"));
+    if (run.error_count != null && run.error_count > 0) {
+      parts.push(tx(t, "gov.progressErrors", "{n} errors", { n: String(run.error_count) }));
+    }
+    return parts;
+  }
+
+  const GOV_BUDGET_STATE_CLASSES = {
+    ok: "hermes-kanban-gov-state--ok",
+    warn: "hermes-kanban-gov-state--warn",
+    stopped: "hermes-kanban-gov-state--stopped",
+  };
+
+  function govBudgetStateClass(state) {
+    return GOV_BUDGET_STATE_CLASSES[String(state || "").toLowerCase()] || GOV_BUDGET_STATE_CLASSES.ok;
+  }
+
   // The SDK's Select component fires ``onValueChange(value)`` directly
   // (it's a shadcn-style popup, not a native <select>). Older plugin
   // code calls ``onChange({target: {value}})`` which silently never
@@ -1307,6 +1412,10 @@
           },
         }) : null,
         h(OrchestrationPanel, null),
+        h(GovernancePanel, {
+          board: board,
+          onOpenTask: setSelectedTaskId,
+        }),
         h(AttentionStrip, {
           boardData,
           onOpen: setSelectedTaskId,
@@ -4929,6 +5038,709 @@
           }, label);
         })
       )
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Governance (P1-B2) — operator panel. Read-mostly views over the existing
+  // governance APIs (/governance/*): budgets & costs per scope, pending
+  // approvals with the human decision (approve / reject / request revision),
+  // the blocked inbox by severity/owner/SLA, project rollups, watchdog &
+  // workflow status, and running progress with percent/rate/ETA. The only
+  // write is the approval decision — it goes through the kernel's fences
+  // (drift invalidation, self-approval, one decision per request), so a stale
+  // view can never approve a changed subject. Board-aware via withBoard();
+  // polls only while expanded — the board's WS stream and reload cadence are
+  // untouched.
+  // -------------------------------------------------------------------------
+
+  const GOV_POLL_MS = 15000;
+
+  const GOV_APPROVAL_STATUS_CLASSES = {
+    pending: "hermes-kanban-gov-ap--pending",
+    revision_requested: "hermes-kanban-gov-ap--revision",
+    approved: "hermes-kanban-gov-ap--approved",
+    rejected: "hermes-kanban-gov-ap--rejected",
+    invalidated: "hermes-kanban-gov-ap--invalidated",
+  };
+
+  // One GET, cancellable, keyed by the URL + a tick (poll / post-decision
+  // reload). Views own their URL (filters included) so the effect re-runs
+  // exactly when the answer would change.
+  function useGovData(url, deps) {
+    const [state, setState] = useState({ loading: true, data: null, err: null });
+    useEffect(function () {
+      let cancelled = false;
+      setState(function (prev) { return { loading: true, data: prev.data, err: null }; });
+      SDK.fetchJSON(url)
+        .then(function (d) {
+          if (!cancelled) setState({ loading: false, data: d, err: null });
+        })
+        .catch(function (e) {
+          if (!cancelled) setState({ loading: false, data: null, err: String(e && e.message ? e.message : e) });
+        });
+      return function () { cancelled = true; };
+    }, deps);
+    return state;
+  }
+
+  function govUsd(value) {
+    const n = Number(value);
+    if (!isFinite(n)) return "—";
+    return `$${n.toFixed(2)}`;
+  }
+
+  function govElapsedSeconds(startedAt) {
+    if (startedAt == null) return null;
+    return Math.max(0, Math.floor(Date.now() / 1000) - startedAt);
+  }
+
+  function govFmtDuration(secs) {
+    if (secs == null || !isFinite(secs) || secs < 0) return "—";
+    if (secs < 60) return `${Math.round(secs)}s`;
+    if (secs < 3600) return `${Math.round(secs / 60)}m`;
+    return `${(secs / 3600).toFixed(1)}h`;
+  }
+
+  function GovLoadError(props) {
+    const { t } = useI18n();
+    if (props.err) {
+      return h("div", { className: "text-xs text-destructive" },
+        tx(t, "gov.loadFailed", "Failed to load: "), props.err);
+    }
+    if (props.loading && !props.data) {
+      return h("div", { className: "text-xs text-muted-foreground" },
+        tx(t, "loadingDetail", "Loading…"));
+    }
+    return null;
+  }
+
+  function GovEmpty(props) {
+    const { t } = useI18n();
+    return h("div", { className: "text-xs text-muted-foreground italic" },
+      tx(t, props.i18nKey, props.fallback));
+  }
+
+  function GovernancePanel(props) {
+    const { t } = useI18n();
+    const [expanded, setExpanded] = useState(false);
+    const [tab, setTab] = useState("approvals");
+    const [pollTick, setPollTick] = useState(0);
+
+    // One gentle interval while the panel is open — progress and inbox stay
+    // live without touching the board's existing WS/poll cadence.
+    useEffect(function () {
+      if (!expanded) return undefined;
+      const iv = setInterval(function () {
+        setPollTick(function (n) { return n + 1; });
+      }, GOV_POLL_MS);
+      return function () { clearInterval(iv); };
+    }, [expanded]);
+
+    const tabs = [
+      { key: "approvals", label: tx(t, "gov.tabApprovals", "Approvals") },
+      { key: "inbox", label: tx(t, "gov.tabInbox", "Blocked Inbox") },
+      { key: "budget", label: tx(t, "gov.tabBudget", "Budget & Costs") },
+      { key: "progress", label: tx(t, "gov.tabProgress", "Running Progress") },
+      { key: "watchdog", label: tx(t, "gov.tabWatchdog", "Watchdog & Workflows") },
+      { key: "projects", label: tx(t, "gov.tabProjects", "Projects") },
+    ];
+
+    if (!expanded) {
+      return h("div", { className: "flex items-center gap-3 text-xs" },
+        h("button", {
+          type: "button",
+          onClick: function () { setExpanded(true); },
+          className: "underline text-muted-foreground hover:text-foreground",
+          title: tx(t, "gov.expandTitle",
+            "Governance views: budgets & costs, pending approvals, blocked inbox, project rollups, watchdog/workflow status, running progress"),
+        }, "▸ " + tx(t, "gov.panelTitle", "Governance")),
+      );
+    }
+
+    return h(Card, { className: "hermes-kanban-gov" },
+      h(CardContent, { className: "p-3 flex flex-col gap-3" },
+        h("div", { className: "hermes-kanban-gov-head" },
+          h("button", {
+            type: "button",
+            onClick: function () { setExpanded(false); },
+            className: "text-sm font-medium underline-offset-2 hover:underline",
+          }, "▾ " + tx(t, "gov.panelTitle", "Governance")),
+          h(Button, {
+            size: "sm",
+            onClick: function () { setPollTick(function (n) { return n + 1; }); },
+            title: tx(t, "refresh", "Refresh"),
+          }, tx(t, "refresh", "Refresh")),
+        ),
+        h("div", { className: "hermes-kanban-gov-tabs", role: "tablist" },
+          tabs.map(function (tb) {
+            return h("button", {
+              key: tb.key,
+              type: "button",
+              role: "tab",
+              "aria-selected": tab === tb.key,
+              onClick: function () { setTab(tb.key); },
+              className: cn("hermes-kanban-gov-tab", tab === tb.key && "hermes-kanban-gov-tab--active"),
+            }, tb.label);
+          }),
+        ),
+        tab === "approvals"
+          ? h(GovApprovalsView, { board: props.board, pollTick: pollTick, onOpenTask: props.onOpenTask })
+          : null,
+        tab === "inbox"
+          ? h(GovInboxView, { board: props.board, pollTick: pollTick, onOpenTask: props.onOpenTask })
+          : null,
+        tab === "budget" ? h(GovBudgetView, { board: props.board, pollTick: pollTick }) : null,
+        tab === "progress"
+          ? h(GovProgressView, { board: props.board, pollTick: pollTick, onOpenTask: props.onOpenTask })
+          : null,
+        tab === "watchdog"
+          ? h(GovWatchdogView, { board: props.board, pollTick: pollTick, onOpenTask: props.onOpenTask })
+          : null,
+        tab === "projects" ? h(GovProjectsView, { board: props.board, pollTick: pollTick }) : null,
+      ),
+    );
+  }
+
+  // --- Approvals tab --------------------------------------------------------
+
+  function GovApprovalsView(props) {
+    const { t } = useI18n();
+    const [busy, setBusy] = useState({});
+    const [msg, setMsg] = useState(null);
+    const [reloadTick, setReloadTick] = useState(0);
+    const url = withBoard(`${API}/governance/approvals`, props.board);
+    const state = useGovData(url, [url, props.pollTick, reloadTick]);
+    const approvals = (state.data && state.data.approvals) || [];
+
+    const decide = useCallback(function (approvalId, decision, note) {
+      // Double-click fence: the second click is a local no-op (the first POST
+      // is in flight), and the server's fences are the final word — 409 for
+      // an already-decided or drift-invalidated request.
+      const next = govBeginDecision(busy, approvalId);
+      if (!next) return;
+      setBusy(next);
+      setMsg(null);
+      SDK.fetchJSON(
+        withBoard(`${API}/governance/approvals/${encodeURIComponent(approvalId)}/decide`, props.board),
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ decision: decision, note: note || null }),
+        },
+      ).then(function () {
+        setMsg({ ok: true, text: tx(t, "gov.decisionApplied", "Decision applied.") });
+      }).catch(function (e) {
+        setMsg({ ok: false, text: String(e && e.message ? e.message : e) });
+      }).then(function () {
+        setBusy(function (b) {
+          const n = Object.assign({}, b);
+          delete n[approvalId];
+          return n;
+        });
+        setReloadTick(function (n) { return n + 1; });  // converge on the list
+      });
+    }, [busy, props.board, t]);
+
+    return h("div", { className: "hermes-kanban-gov-view" },
+      h(GovLoadError, { err: state.err, loading: state.loading, data: state.data }),
+      msg ? h("div", { className: msg.ok ? "hermes-kanban-msg-ok" : "hermes-kanban-msg-err" }, msg.text) : null,
+      approvals.length === 0 && !state.err && !state.loading
+        ? h(GovEmpty, { i18nKey: "gov.noApprovals", fallback: "— no approval requests —" })
+        : null,
+      h("div", { className: "hermes-kanban-gov-list" },
+        approvals.map(function (ap) {
+          return h(GovApprovalCard, {
+            key: ap.id,
+            approval: ap,
+            busy: !!busy[ap.id],
+            onDecide: decide,
+            onOpenTask: props.onOpenTask,
+          });
+        }),
+      ),
+    );
+  }
+
+  function GovApprovalCard(props) {
+    const { t } = useI18n();
+    const ap = props.approval;
+    const [note, setNote] = useState("");
+    const open = govDecisionEnabled(ap.status);
+    const statusClass = GOV_APPROVAL_STATUS_CLASSES[ap.status] || GOV_APPROVAL_STATUS_CLASSES.pending;
+    const subjectIsTask = ap.subject_kind === "task";
+    return h("div", { className: "hermes-kanban-gov-card" },
+      h("div", { className: "hermes-kanban-gov-card-head" },
+        h("code", { className: "hermes-kanban-gov-id" }, ap.id),
+        h(Badge, { variant: "outline" }, ap.type),
+        h("span", { className: cn("hermes-kanban-gov-pill", statusClass) }, ap.status),
+        ap.tenant ? h("span", { className: "text-[10px] text-muted-foreground" }, ap.tenant) : null,
+        h("span", { className: "hermes-kanban-gov-ago" },
+          timeAgo ? timeAgo(ap.requested_at) : ""),
+      ),
+      h("div", { className: "hermes-kanban-gov-card-body" },
+        h("span", { className: "text-xs text-muted-foreground" },
+          tx(t, "gov.subject", "Subject") + ": "),
+        subjectIsTask
+          ? h("button", {
+              type: "button",
+              className: "hermes-kanban-gov-link",
+              onClick: function () { if (props.onOpenTask) props.onOpenTask(ap.subject_id); },
+              title: tx(t, "open", "Open"),
+            }, ap.subject_id)
+          : h("code", { className: "text-xs" }, `${ap.subject_kind}:${ap.subject_id}`),
+        h("span", { className: "text-xs text-muted-foreground" },
+          ` · ${tx(t, "createdBy", "Created by")}: ${ap.requester}`),
+        ap.request_note
+          ? h("div", { className: "hermes-kanban-gov-note-text" }, ap.request_note)
+          : null,
+      ),
+      open
+        ? h("div", { className: "hermes-kanban-gov-actions" },
+            h(Input, {
+              value: note,
+              onChange: function (e) { setNote(e.target.value); },
+              placeholder: tx(t, "gov.decisionNote", "Decision note (optional)"),
+              className: "h-7 text-xs flex-1",
+            }),
+            h(Button, {
+              size: "sm",
+              disabled: props.busy,
+              onClick: function () { props.onDecide(ap.id, "approve", note); },
+            }, props.busy ? "…" : tx(t, "gov.approve", "Approve")),
+            h(Button, {
+              size: "sm",
+              variant: "outline",
+              disabled: props.busy,
+              onClick: function () { props.onDecide(ap.id, "revise", note); },
+            }, tx(t, "gov.requestRevision", "Request revision")),
+            h(Button, {
+              size: "sm",
+              variant: "outline",
+              disabled: props.busy,
+              onClick: function () { props.onDecide(ap.id, "reject", note); },
+            }, tx(t, "gov.reject", "Reject")),
+          )
+        : h("div", { className: "hermes-kanban-gov-meta" },
+            ap.invalidation_reason
+              ? h("span", { className: "text-xs text-muted-foreground" },
+                  `${tx(t, "gov.invalidated", "Invalidated")}: ${ap.invalidation_reason}`)
+              : null,
+            ap.approver
+              ? h("span", { className: "text-xs text-muted-foreground" },
+                  `${tx(t, "gov.decidedBy", "Decided by")} @${ap.approver}` +
+                  (ap.decided_via ? ` (${ap.decided_via})` : ""))
+              : null,
+            ap.decision_note
+              ? h("span", { className: "hermes-kanban-gov-note-text" }, ap.decision_note)
+              : null,
+          ),
+    );
+  }
+
+  // --- Blocked inbox tab ----------------------------------------------------
+
+  function GovInboxView(props) {
+    const { t } = useI18n();
+    const [severity, setSeverity] = useState("");
+    const [source, setSource] = useState("");
+    const qs = new URLSearchParams();
+    if (severity) qs.set("severity", severity);
+    if (source) qs.set("source", source);
+    const qsText = qs.toString();
+    const url = withBoard(`${API}/governance/inbox${qsText ? "?" + qsText : ""}`, props.board);
+    const state = useGovData(url, [url, props.pollTick]);
+    const rows = govSortInboxRows((state.data && state.data.rows) || []);
+
+    const severityOptions = ["", "critical", "high", "medium", "low"].map(function (sev) {
+      return h(SelectOption, { key: sev || "all", value: sev },
+        sev ? sev : tx(t, "gov.allSeverities", "All severities"));
+    });
+    const sourceOptions = ["", "blocked", "approval", "review"].map(function (src) {
+      return h(SelectOption, { key: src || "all", value: src },
+        src ? src : tx(t, "gov.allSources", "All sources"));
+    });
+
+    return h("div", { className: "hermes-kanban-gov-view" },
+      h("div", { className: "hermes-kanban-gov-filters" },
+        h(Select, Object.assign({
+          value: severity,
+          className: "h-7 text-xs",
+          "aria-label": tx(t, "gov.severityFilter", "Severity filter"),
+        }, selectChangeHandler(setSeverity)), severityOptions),
+        h(Select, Object.assign({
+          value: source,
+          className: "h-7 text-xs",
+          "aria-label": tx(t, "gov.sourceFilter", "Source filter"),
+        }, selectChangeHandler(setSource)), sourceOptions),
+      ),
+      h(GovLoadError, { err: state.err, loading: state.loading, data: state.data }),
+      rows.length === 0 && !state.err && !state.loading
+        ? h(GovEmpty, { i18nKey: "gov.inboxEmpty", fallback: "— inbox is clear —" })
+        : null,
+      h("div", { className: "hermes-kanban-gov-list" },
+        rows.map(function (row) { return h(GovInboxRow, { key: row.source + ":" + row.ref, row: row, onOpenTask: props.onOpenTask }); }),
+      ),
+    );
+  }
+
+  function GovInboxRow(props) {
+    const { t } = useI18n();
+    const row = props.row;
+    const slaPct = (row.age_seconds != null && row.sla_hours)
+      ? Math.round((row.age_seconds / (row.sla_hours * 3600)) * 100)
+      : null;
+    const slaClass = slaPct == null ? "" : (slaPct >= 100
+      ? "hermes-kanban-gov-sla--over"
+      : (slaPct >= 80 ? "hermes-kanban-gov-sla--near" : "hermes-kanban-gov-sla--ok"));
+    return h("div", { className: "hermes-kanban-gov-card" },
+      h("div", { className: "hermes-kanban-gov-card-head" },
+        h("span", { className: cn("hermes-kanban-gov-pill", govSeverityClass(row.severity)) },
+          row.severity),
+        h(Badge, { variant: "outline" }, row.source),
+        row.task_id
+          ? h("button", {
+              type: "button",
+              className: "hermes-kanban-gov-link",
+              onClick: function () { if (props.onOpenTask) props.onOpenTask(row.task_id); },
+              title: tx(t, "open", "Open"),
+            }, row.task_id)
+          : h("code", { className: "hermes-kanban-gov-id" }, row.ref),
+        h("span", { className: "hermes-kanban-gov-ago" },
+          timeAgo && row.blocked_since != null ? timeAgo(row.blocked_since) : ""),
+      ),
+      h("div", { className: "hermes-kanban-gov-card-body" },
+        row.title ? h("span", { className: "text-xs" }, row.title) : null,
+        h("span", { className: "text-[10px] text-muted-foreground" },
+          `${tx(t, "gov.owner", "Owner")}: ${row.action_owner || "—"}` +
+          (row.assignee ? ` · @${row.assignee}` : "")),
+        slaPct != null
+          ? h("span", { className: cn("hermes-kanban-gov-sla", slaClass) },
+              `SLA ${slaPct}%`)
+          : h("span", { className: "hermes-kanban-gov-sla hermes-kanban-gov-sla--ok" },
+              tx(t, "gov.slaUnknown", "SLA unknown")),
+        row.block_reason
+          ? h("span", { className: "hermes-kanban-gov-note-text" }, String(row.block_reason))
+          : null,
+      ),
+    );
+  }
+
+  // --- Budget & costs tab ---------------------------------------------------
+
+  function GovBudgetView(props) {
+    const { t } = useI18n();
+    const url = withBoard(`${API}/governance/budget`, props.board);
+    const state = useGovData(url, [url, props.pollTick]);
+    const d = state.data && state.data.budget;
+    const budgets = (d && d.budgets) || [];
+    return h("div", { className: "hermes-kanban-gov-view" },
+      h(GovLoadError, { err: state.err, loading: state.loading, data: state.data }),
+      d ? h("div", { className: "hermes-kanban-gov-stats" },
+        h("div", { className: "hermes-kanban-gov-stat" },
+          h("span", { className: "hermes-kanban-gov-stat-label" }, tx(t, "gov.period", "Period")),
+          h("span", { className: "hermes-kanban-gov-stat-value" }, d.period)),
+        h("div", { className: "hermes-kanban-gov-stat" },
+          h("span", { className: "hermes-kanban-gov-stat-label" }, tx(t, "gov.mtdSpend", "MTD known spend")),
+          h("span", { className: "hermes-kanban-gov-stat-value" }, govUsd(d.mtd_usd))),
+        h("div", { className: "hermes-kanban-gov-stat" },
+          h("span", { className: "hermes-kanban-gov-stat-label" }, tx(t, "gov.runsInPeriod", "Runs in period")),
+          h("span", { className: "hermes-kanban-gov-stat-value" }, String(d.runs_total))),
+        h("div", { className: "hermes-kanban-gov-stat" },
+          h("span", { className: "hermes-kanban-gov-stat-label" }, tx(t, "gov.unknownRuns", "Runs without measured cost")),
+          h("span", { className: "hermes-kanban-gov-stat-value" },
+            `${d.unknown_runs} (${Math.round((d.unknown_share || 0) * 100)}%)`)),
+      ) : null,
+      budgets.length === 0 && !state.err && !state.loading
+        ? h(GovEmpty, { i18nKey: "gov.noBudgets", fallback: "— no budgets configured for this board —" })
+        : null,
+      h("div", { className: "hermes-kanban-gov-list" },
+        budgets.map(function (b) {
+          const pct = b.limit_usd > 0 ? Math.min(100, Math.round((b.mtd_usd / b.limit_usd) * 100)) : null;
+          return h("div", { key: `${b.scope}:${b.ref}:${b.period}`, className: "hermes-kanban-gov-card" },
+            h("div", { className: "hermes-kanban-gov-card-head" },
+              h("span", { className: "hermes-kanban-gov-scope" }, `${b.scope}: ${b.ref}`),
+              h("span", { className: "text-[10px] text-muted-foreground" }, b.period),
+              h("span", { className: cn("hermes-kanban-gov-pill", govBudgetStateClass(b.state)) }, b.state),
+              h("span", { className: "hermes-kanban-gov-ago" },
+                `${govUsd(b.mtd_usd)} / ${govUsd(b.limit_usd)}`),
+            ),
+            pct != null
+              ? h("div", { className: "hermes-kanban-gov-bar" },
+                  h("div", {
+                    className: cn("hermes-kanban-gov-bar-fill",
+                      b.state === "stopped" && "hermes-kanban-gov-bar-fill--stopped",
+                      b.state === "warn" && "hermes-kanban-gov-bar-fill--warn"),
+                    style: { width: `${pct}%` },
+                  }),
+                )
+              : null,
+          );
+        }),
+      ),
+    );
+  }
+
+  // --- Running progress tab -------------------------------------------------
+
+  function GovProgressView(props) {
+    const { t } = useI18n();
+    const url = withBoard(`${API}/governance/progress`, props.board);
+    const state = useGovData(url, [url, props.pollTick]);
+    const data = state.data;
+    const runs = (data && data.runs) || [];
+    return h("div", { className: "hermes-kanban-gov-view" },
+      h(GovLoadError, { err: state.err, loading: state.loading, data: data }),
+      runs.length === 0 && !state.err && !state.loading
+        ? h(GovEmpty, { i18nKey: "gov.noRunning", fallback: "— no running tasks —" })
+        : null,
+      data && data.truncated
+        ? h("div", { className: "text-[10px] text-muted-foreground" },
+            tx(t, "gov.truncated", "View truncated — showing the first tasks only."))
+        : null,
+      h("div", { className: "hermes-kanban-gov-list" },
+        runs.map(function (item) {
+          const run = item.run || {};
+          const parts = govProgressParts(run, t);
+          const pct = run.progress_pct != null ? Math.max(0, Math.min(100, run.progress_pct)) : null;
+          return h("div", { key: item.task_id, className: "hermes-kanban-gov-card" },
+            h("div", { className: "hermes-kanban-gov-card-head" },
+              h("button", {
+                type: "button",
+                className: "hermes-kanban-gov-link hermes-kanban-gov-title",
+                onClick: function () { if (props.onOpenTask) props.onOpenTask(item.task_id); },
+                title: tx(t, "open", "Open"),
+              }, item.title || item.task_id),
+              run.profile ? h("span", { className: "text-[10px] text-muted-foreground" }, `@${run.profile}`) : null,
+              h("span", { className: "hermes-kanban-gov-ago" },
+                govFmtDuration(govElapsedSeconds(run.started_at))),
+            ),
+            pct != null
+              ? h("div", { className: "hermes-kanban-gov-bar" },
+                  h("div", { className: "hermes-kanban-gov-bar-fill", style: { width: `${pct}%` } }),
+                )
+              : null,
+            parts
+              ? h("div", { className: "hermes-kanban-gov-progress-line" }, parts.join(" · "))
+              : h("div", { className: "hermes-kanban-gov-progress-line hermes-kanban-gov-progress-line--unknown" },
+                  tx(t, "gov.noStructuredProgress", "No structured progress reported yet")),
+            run.progress_updated_at != null
+              ? h("div", { className: "text-[10px] text-muted-foreground" },
+                  `${tx(t, "gov.lastUpdate", "Last update")} ${timeAgo ? timeAgo(run.progress_updated_at) : ""}`)
+              : null,
+          );
+        }),
+      ),
+    );
+  }
+
+  // --- Watchdog & workflows tab ---------------------------------------------
+
+  function GovWatchdogView(props) {
+    const { t } = useI18n();
+    const wdUrl = withBoard(`${API}/governance/watchdogs`, props.board);
+    const wfUrl = withBoard(`${API}/governance/workflows`, props.board);
+    const wd = useGovData(wdUrl, [wdUrl, props.pollTick]);
+    const wf = useGovData(wfUrl, [wfUrl, props.pollTick]);
+    const watchdogs = (wd.data && wd.data.watchdogs) || [];
+    const firings = (wd.data && wd.data.firings) || [];
+    const templates = (wf.data && wf.data.templates) || [];
+    const enabled = !!(wd.data && wd.data.enabled);
+    return h("div", { className: "hermes-kanban-gov-view" },
+      h("div", { className: "hermes-kanban-gov-sections" },
+        h("div", { className: "hermes-kanban-gov-section" },
+          h("div", { className: "hermes-kanban-gov-section-head" },
+            tx(t, "gov.watchdogs", "Watchdogs"),
+            h("span", {
+              className: cn("hermes-kanban-gov-pill",
+                enabled ? "hermes-kanban-gov-state--ok" : "hermes-kanban-gov-state--warn"),
+              }, enabled
+                ? tx(t, "gov.enabled", "enabled")
+                : tx(t, "gov.disabled", "disabled")),
+          ),
+          h(GovLoadError, { err: wd.err, loading: wd.loading, data: wd.data }),
+          watchdogs.length === 0 && !wd.err && !wd.loading
+            ? h(GovEmpty, { i18nKey: "gov.noWatchdogs", fallback: "— no watchdogs on this board —" })
+            : null,
+          h("div", { className: "hermes-kanban-gov-list" },
+            watchdogs.map(function (w) {
+              return h("div", { key: w.id, className: "hermes-kanban-gov-card" },
+                h("div", { className: "hermes-kanban-gov-card-head" },
+                  h("code", { className: "hermes-kanban-gov-id" }, w.id),
+                  w.task_id
+                    ? h("button", {
+                        type: "button",
+                        className: "hermes-kanban-gov-link",
+                        onClick: function () { if (props.onOpenTask) props.onOpenTask(w.task_id); },
+                        title: tx(t, "open", "Open"),
+                      }, w.task_id)
+                    : null,
+                  h("span", { className: "hermes-kanban-gov-ago" },
+                    `@${w.reviewer || "—"}`),
+                  h("span", { className: cn("hermes-kanban-gov-pill",
+                    w.status === "active" ? "hermes-kanban-gov-state--ok" : "hermes-kanban-gov-ap--invalidated") },
+                    w.status),
+                  w.escalated_at != null
+                    ? h("span", { className: "hermes-kanban-gov-pill hermes-kanban-gov-sev--critical" },
+                        tx(t, "gov.escalated", "escalated"))
+                    : null,
+                ),
+              );
+            }),
+          ),
+          firings.length > 0
+            ? h("div", { className: "hermes-kanban-gov-subhead" },
+                tx(t, "gov.recentFirings", "Recent firings"))
+            : null,
+          h("div", { className: "hermes-kanban-gov-list" },
+            firings.map(function (f) {
+              return h("div", { key: f.id, className: "hermes-kanban-gov-card" },
+                h("div", { className: "hermes-kanban-gov-card-head" },
+                  f.task_id
+                    ? h("button", {
+                        type: "button",
+                        className: "hermes-kanban-gov-link",
+                        onClick: function () { if (props.onOpenTask) props.onOpenTask(f.task_id); },
+                        title: tx(t, "open", "Open"),
+                      }, f.task_id)
+                    : h("code", { className: "hermes-kanban-gov-id" }, f.watchdog_id),
+                  h("span", { className: "text-[10px] text-muted-foreground" },
+                    `${tx(t, "gov.rounds", "rounds")}: ${f.rounds}`),
+                  h("span", { className: cn("hermes-kanban-gov-pill",
+                    f.outcome ? "hermes-kanban-gov-state--ok" : "hermes-kanban-gov-sev--high") },
+                    f.outcome || tx(t, "gov.undecided", "undecided")),
+                  h("span", { className: "hermes-kanban-gov-ago" },
+                    timeAgo && f.fired_at != null ? timeAgo(f.fired_at) : ""),
+                ),
+              );
+            }),
+          ),
+        ),
+        h("div", { className: "hermes-kanban-gov-section" },
+          h("div", { className: "hermes-kanban-gov-section-head" },
+            tx(t, "gov.workflowTemplates", "Workflow templates")),
+          h(GovLoadError, { err: wf.err, loading: wf.loading, data: wf.data }),
+          templates.length === 0 && !wf.err && !wf.loading
+            ? h(GovEmpty, { i18nKey: "gov.noWorkflows", fallback: "— no workflow templates on this board —" })
+            : null,
+          h("div", { className: "hermes-kanban-gov-list" },
+            templates.map(function (tpl) {
+              return h("div", { key: tpl.id, className: "hermes-kanban-gov-card" },
+                h("div", { className: "hermes-kanban-gov-card-head" },
+                  h("span", { className: "hermes-kanban-gov-title" }, tpl.name),
+                  h("span", { className: "hermes-kanban-gov-ago" },
+                    `${(tpl.steps || []).length} ${tx(t, "gov.steps", "steps")}`),
+                ),
+                h("div", { className: "hermes-kanban-gov-card-body" },
+                  (tpl.steps || []).map(function (s, idx) {
+                    return h("span", { key: s.step_key || idx, className: "text-[10px] text-muted-foreground" },
+                      `${idx + 1}. ${s.title} (@${s.assignee})`);
+                  }),
+                ),
+              );
+            }),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // --- Projects rollup tab --------------------------------------------------
+
+  function GovProjectsView(props) {
+    const { t } = useI18n();
+    const projectsUrl = withBoard(`${API}/projects`, props.board);
+    const plist = useGovData(projectsUrl, [projectsUrl, props.pollTick]);
+    const projects = (plist.data && plist.data.projects) || [];
+    const [projectId, setProjectId] = useState("");
+
+    // Auto-select the first project so the rollup is useful without a click.
+    useEffect(function () {
+      if (!projectId && projects.length) setProjectId(projects[0].id);
+    }, [projectId, projects]);
+
+    const rollupUrl = projectId
+      ? withBoard(`${API}/governance/projects/rollup?project_id=${encodeURIComponent(projectId)}`, props.board)
+      : null;
+    const rollup = useGovData(rollupUrl || `${API}/governance/budget`, [rollupUrl, props.pollTick]);
+    const r = rollup.data && rollup.data.rollup;
+
+    return h("div", { className: "hermes-kanban-gov-view" },
+      h("div", { className: "hermes-kanban-gov-filters" },
+        h(Select, Object.assign({
+          value: projectId,
+          className: "h-7 text-xs",
+          "aria-label": tx(t, "gov.project", "Project"),
+        }, selectChangeHandler(setProjectId)),
+          projects.length
+            ? projects.map(function (p) {
+                return h(SelectOption, { key: p.id, value: p.id }, p.name || p.slug || p.id);
+              })
+            : [h(SelectOption, { key: "none", value: "" },
+                tx(t, "gov.noProjects", "— no projects —"))],
+        ),
+      ),
+      h(GovLoadError, { err: plist.err, loading: plist.loading, data: plist.data }),
+      !projectId && !plist.err
+        ? h(GovEmpty, { i18nKey: "gov.selectProject", fallback: "— select a project —" })
+        : null,
+      rollupUrl && rollup.err
+        ? h("div", { className: "text-xs text-destructive" }, rollup.err)
+        : null,
+      r ? h("div", { className: "hermes-kanban-gov-rollup" },
+        h("div", { className: "hermes-kanban-gov-stats" },
+          h("div", { className: "hermes-kanban-gov-stat" },
+            h("span", { className: "hermes-kanban-gov-stat-label" }, tx(t, "gov.tasksTotal", "Tasks")),
+            h("span", { className: "hermes-kanban-gov-stat-value" }, String(r.tasks.total))),
+          h("div", { className: "hermes-kanban-gov-stat" },
+            h("span", { className: "hermes-kanban-gov-stat-label" }, tx(t, "gov.tasksOpen", "Open")),
+            h("span", { className: "hermes-kanban-gov-stat-value" }, String(r.tasks.open))),
+          h("div", { className: "hermes-kanban-gov-stat" },
+            h("span", { className: "hermes-kanban-gov-stat-label" }, tx(t, "gov.tasksBlocked", "Blocked")),
+            h("span", { className: "hermes-kanban-gov-stat-value" }, String(r.tasks.blocked))),
+          h("div", { className: "hermes-kanban-gov-stat" },
+            h("span", { className: "hermes-kanban-gov-stat-label" }, tx(t, "gov.doneRatio", "Done ratio")),
+            h("span", { className: "hermes-kanban-gov-stat-value" },
+              r.progress.done_ratio != null
+                ? `${Math.round(r.progress.done_ratio * 100)}%`
+                : tx(t, "gov.unknownShort", "unknown"))),
+          h("div", { className: "hermes-kanban-gov-stat" },
+            h("span", { className: "hermes-kanban-gov-stat-label" }, tx(t, "gov.mtdSpend", "MTD known spend")),
+            h("span", { className: "hermes-kanban-gov-stat-value" },
+              `${govUsd(r.costs.mtd_usd)} (${r.costs.unknown_runs}/${r.costs.runs_total} ${tx(t, "gov.unknownShort", "unknown")})`)),
+        ),
+        r.budget
+          ? h("div", { className: "hermes-kanban-gov-card" },
+              h("div", { className: "hermes-kanban-gov-card-head" },
+                h("span", { className: "hermes-kanban-gov-scope" }, tx(t, "gov.projectBudget", "Project budget")),
+                h("span", { className: cn("hermes-kanban-gov-pill", govBudgetStateClass(r.budget.state)) }, r.budget.state),
+                h("span", { className: "hermes-kanban-gov-ago" },
+                  `${govUsd(r.budget.mtd_usd)} / ${govUsd(r.budget.limit_usd)}`),
+              ))
+          : null,
+        r.goal && (r.goal.goal || r.goal.owner)
+          ? h("div", { className: "hermes-kanban-gov-card" },
+              h("div", { className: "hermes-kanban-gov-card-head" },
+                h("span", { className: "hermes-kanban-gov-title" }, tx(t, "gov.projectGoal", "Project goal")),
+                r.goal.status ? h("span", { className: "text-[10px] text-muted-foreground" }, r.goal.status) : null,
+                r.goal.owner ? h("span", { className: "hermes-kanban-gov-ago" }, `@${r.goal.owner}`) : null,
+              ),
+              h("div", { className: "hermes-kanban-gov-card-body" },
+                h("span", { className: "text-xs" }, r.goal.goal || ""),
+                r.goal.monthly_budget_usd != null
+                  ? h("span", { className: "text-[10px] text-muted-foreground" },
+                      ` · ${tx(t, "gov.monthlyBudget", "Monthly budget")} ${govUsd(r.goal.monthly_budget_usd)}`)
+                  : null,
+              ))
+          : null,
+        (r.tenants || []).length > 0
+          ? h("div", { className: "hermes-kanban-gov-card" },
+              h("div", { className: "hermes-kanban-gov-card-head" },
+                h("span", { className: "hermes-kanban-gov-scope" }, tx(t, "gov.tenants", "Tenants")),
+                h("span", { className: "hermes-kanban-gov-ago" }, r.tenants.join(", ")),
+              ))
+          : null,
+      ) : null,
     );
   }
 

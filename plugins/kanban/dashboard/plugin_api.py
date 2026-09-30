@@ -1677,6 +1677,268 @@ def set_orchestration_settings(payload: OrchestrationSettingsBody):
     return get_orchestration_settings()  # callers re-render from the resolved state
 
 
+# --- Governance operator views (P1-B2) ----------------------------------------
+#
+# Thin read/write wrappers over the governance kernels (``hermes_cli.kanban_approvals``,
+# ``kanban_cost``, ``kanban_inbox``, ``kanban_projects``, ``kanban_watchdog``,
+# ``kanban_workflows``, ``kanban_activity``) — the same code paths the CLI and the
+# worker toolset use, so the dashboard cannot drift from their semantics. Every
+# route resolves the board exactly like the rest of the plugin (400 malformed,
+# 404 unknown) and keeps board isolation; kernel refusals map to honest status
+# codes. The progress view projects through the activity snapshot's bounded,
+# secret-redacted allowlist — worker pids, claim locks, run metadata, task bodies
+# and results never appear in a governance payload.
+
+
+def _gov_slug(board: Optional[str]) -> str:
+    """Definite board slug for kernels that take an explicit ``board`` argument
+    (``_board_conn`` yields ``None`` for the omitted/active case)."""
+    return board or kanban_db.get_current_board() or kanban_db.DEFAULT_BOARD
+
+
+@contextmanager
+def _approval_errors() -> Iterator[None]:
+    """Map approval-kernel refusals to honest status codes.
+
+    Order matters: ``ApprovalStateError`` IS a ``ValueError``, so the state
+    conflict (409 — already decided / invalidated by drift) must be mapped
+    before the generic validation refusal (400).
+    """
+    from hermes_cli.kanban_approvals import ApprovalStateError
+
+    try:
+        yield
+    except ApprovalStateError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/governance/budget")
+def governance_budget(board: Optional[str] = _BOARD_Q, period: Optional[str] = Query(None)):
+    """Costs + budgets of the board's current month (governance read view):
+    per-scope rows (board / tenant / project / profile) with MTD, limit, warn
+    ratio and state, plus the board-month usage stats (unknown runs stay
+    ``unknown_runs`` / ``unknown_share`` — never reinterpreted as 0)."""
+    from hermes_cli import kanban_cost as kcost
+
+    with _board_conn(board) as (board, conn):
+        slug = _gov_slug(board)
+        with _value_error_400():
+            # Kernel period normalizer ('YYYY-MM', None = current) — a
+            # malformed period is a validation refusal, not a silent empty read.
+            period_value = kcost._normalize_period(period, monthly=False)
+            status = kcost.budget_status(conn, slug, period=period_value)
+        return {"board": slug, "budget": status}
+
+
+@router.get("/governance/approvals")
+def list_governance_approvals(
+    board: Optional[str] = _BOARD_Q,
+    status: Optional[str] = Query(None),
+    type: Optional[str] = Query(None),
+):
+    """All approvals of the board (newest first). Open rows are drift-checked on
+    read, exactly like the CLI list — a changed subject surfaces as
+    ``invalidated`` here, never as a decidable ``pending``."""
+    from hermes_cli import kanban_approvals as kba
+
+    with _board_conn(board) as (board, conn):
+        slug = _gov_slug(board)
+        with _value_error_400():
+            approvals = kba.list_approvals(conn, slug, status=status, type=type)
+        return {"board": slug, "approvals": approvals}
+
+
+@router.get("/governance/approvals/{approval_id}")
+def get_governance_approval(approval_id: str, board: Optional[str] = _BOARD_Q):
+    """One approval (drift-checked when open). Board isolation: a row of another
+    board is ``404 not found`` here, never visible."""
+    from hermes_cli import kanban_approvals as kba
+
+    with _board_conn(board) as (board, conn):
+        slug = _gov_slug(board)
+        try:
+            approval = kba.get_approval(conn, approval_id)
+        except LookupError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        if approval.get("board") != slug:
+            raise HTTPException(status_code=404, detail=f"approval {approval_id!r} not found on this board")
+        return {"approval": approval}
+
+
+class ApprovalDecisionBody(BaseModel):
+    decision: str = Field(..., description="approve | reject | revise")
+    approver: Optional[str] = None
+    note: Optional[str] = None
+
+
+@router.post("/governance/approvals/{approval_id}/decide")
+def decide_governance_approval(approval_id: str, payload: ApprovalDecisionBody, board: Optional[str] = _BOARD_Q):
+    """The human decision on one approval: approve | reject | revise (request
+    revision). Thin wrapper over ``kanban_approvals.decide_approval`` with
+    ``via="dashboard"`` — every kernel fence applies unchanged:
+
+    * dispatched-worker contexts are refused (403) — the dashboard is a human
+      surface, and this endpoint never becomes a worker's decide tool;
+    * self-approval is refused (403, approver == requester);
+    * a drifted / invalidated subject is refused (409) with the request
+      invalidated — a stale view can never approve a changed subject;
+    * a decided approval can never be decided twice (409) — a double click is
+      answered with the current state, not a second mutation.
+
+    ``approve`` releases exactly the tasks bound by ``approval:<id>`` (same
+    unblock semantics as the CLI). The default approver is the acting
+    dashboard profile.
+    """
+    from hermes_cli import kanban_approvals as kba
+
+    with _board_conn(board) as (board, conn):
+        slug = _gov_slug(board)
+        approver = (payload.approver or "").strip() or kba._acting_profile()
+
+        def _decide():
+            with _approval_errors():
+                return kba.decide_approval(
+                    conn, approval_id,
+                    decision=payload.decision,
+                    approver=approver,
+                    note=(payload.note or "").strip() or None,
+                    via="dashboard",
+                )
+
+        # decide_approval compares the row against get_current_board(), so the
+        # board is pinned context-locally for the call (never via the process
+        # env — concurrent requests serve different boards).
+        result = _with_board_pinned(slug, _decide)
+        return {"approval": result}
+
+
+@router.get("/governance/inbox")
+def governance_inbox(
+    board: Optional[str] = _BOARD_Q,
+    severity: Optional[str] = Query(None),
+    source: Optional[str] = Query(None),
+    block_kind: Optional[str] = Query(None),
+    limit: int = Query(200, ge=1, le=500),
+):
+    """The blocked inbox: blocked tasks + pending approvals + open reviews,
+    deterministically ordered (severity desc, age desc, ref asc) with SLA
+    bands. Read-only — this appends no events and touches no statuses."""
+    from hermes_cli import kanban_inbox as kbin
+
+    with _board_conn(board) as (board, conn):
+        slug = _gov_slug(board)
+        with _value_error_400():
+            rows = kbin.inbox_rows(
+                conn, board=slug, severity=severity, source=source,
+                block_kind=block_kind, limit=limit,
+            )
+        return {"board": slug, "rows": rows}
+
+
+@router.get("/governance/projects/rollup")
+def governance_project_rollup(
+    board: Optional[str] = _BOARD_Q,
+    project_id: str = Query(...),
+    tenant: Optional[str] = Query(None),
+    period: Optional[str] = Query(None),
+):
+    """Read-only rollup of one project: task statuses, progress, known MTD
+    costs, governing budget and goal. Unknown projects / foreign references
+    are refused (400) by the same fail-closed validator the CLI uses."""
+    from hermes_cli import kanban_cost as kcost
+    from hermes_cli import kanban_projects as kproj
+
+    with _board_conn(board) as (board, conn):
+        slug = _gov_slug(board)
+        with _value_error_400():
+            period_value = kcost._normalize_period(period, monthly=False) if period else None
+            rollup = kproj.project_rollup(
+                conn, board=slug, project_id=project_id, tenant=tenant, period=period_value,
+            )
+        return {"rollup": rollup}
+
+
+@router.get("/governance/watchdogs")
+def governance_watchdogs(
+    board: Optional[str] = _BOARD_Q,
+    status: Optional[str] = Query(None),
+    firings_limit: int = Query(50, ge=1, le=200),
+):
+    """Watchdog + firing status of the board (governance read view): active and
+    historical watchdogs with their reviewer/instructions, plus the recent
+    firing ledger (undecided first-class, newest overall). Checks themselves
+    run on the dispatcher tick — this surface never fires one."""
+    from hermes_cli import kanban_watchdog as kbwd
+
+    with _board_conn(board) as (board, conn):
+        slug = _gov_slug(board)
+        with _value_error_400():
+            watchdogs = kbwd.list_watchdogs(conn, slug, status=status)
+            firings = kbwd.list_firings(conn, slug)[:firings_limit]
+        return {
+            "board": slug,
+            "enabled": kbwd.watchdog_enabled(),
+            "watchdogs": watchdogs,
+            "firings": firings,
+        }
+
+
+@router.get("/governance/workflows")
+def governance_workflows(board: Optional[str] = _BOARD_Q):
+    """Workflow templates of the board with their validated step chains
+    (roles, not concrete profiles). Read-only — applying a template stays a
+    deliberate operator action through the CLI/task surface."""
+    from hermes_cli import kanban_workflows as kbwf
+
+    with _board_conn(board) as (board, conn):
+        slug = _gov_slug(board)
+        with _value_error_400():
+            templates = [t.as_dict() for t in kbwf.list_templates(conn, board=slug)]
+        return {"board": slug, "templates": templates}
+
+
+@router.get("/governance/progress")
+def governance_progress(board: Optional[str] = _BOARD_Q):
+    """Running tasks with their structured progress (phase / percent / rate /
+    ETA), projected through the activity snapshot's bounded, secret-redacted
+    allowlist: worker pids, claim locks, run metadata, task bodies and results
+    never appear here, and unknown fields stay ``null`` — never invented."""
+    from hermes_cli import kanban_activity as kbact
+
+    slug = _gov_slug(_resolve_board(board))
+    with _value_error_400():
+        snapshot = kbact.get_activity_snapshot(board=slug)
+
+    runs: list[dict[str, Any]] = []
+
+    def _walk(node: dict) -> None:
+        if node.get("status") == "running" and node.get("run"):
+            runs.append({
+                "task_id": node["task_id"],
+                "title": node["title"],
+                "assignee": node["assignee"],
+                "run": node["run"],
+            })
+        for child in node.get("children") or []:
+            _walk(child)
+
+    for root in snapshot.get("roots") or []:
+        _walk(root)
+
+    return {
+        "board": snapshot.get("board"),
+        "checked_at": snapshot.get("checked_at"),
+        "truncated": bool(snapshot.get("truncated")),
+        "runs": runs,
+    }
+
+
 # --- WebSocket: /events?since=<event_id>&board=<slug> ------------------------
 
 # Event tail poll interval: WAL + 300 ms polling is the simplest robust approach (negligible CPU).

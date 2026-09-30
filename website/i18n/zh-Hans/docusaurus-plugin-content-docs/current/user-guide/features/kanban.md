@@ -410,8 +410,13 @@ hermes dashboard        # 导航栏中出现 "Kanban" 标签页，位于 "Skills
   - **状态操作行**（→ triage / → ready / → running / block / unblock / complete / archive），破坏性转换有确认提示。对于 **Triage** 列中的卡片，该行还提供两个 LLM 驱动的操作：**⚗ Decompose** 将任务扇出为路由到专家配置文件（按描述）的子任务图（编排器驱动路径），**✨ Specify** 进行单任务规格重写。当 LLM 判断任务不需要扇出时，Decompose 会回退到类似 specify 的推进，因此它是严格的超集。两者都可以从 CLI（`hermes kanban decompose <id>` / `specify <id>` / `--all`）、任何 gateway 平台（`/kanban decompose <id>`）以及通过 `POST /api/plugins/kanban/tasks/:id/decompose` 和 `…/specify` 以编程方式访问。在 `config.yaml` 的 `auxiliary.kanban_decomposer` 和 `auxiliary.triage_specifier` 下配置模型。
   - 结果部分（也以 markdown 渲染）、带 Enter 提交的评论线程、最近 20 个事件。
 - **工具栏过滤器** —— 自由文本搜索、租户下拉菜单（默认为 `config.yaml` 中的 `dashboard.kanban.default_tenant`）、受让人下拉菜单、"显示已归档"切换、"按配置文件分组"切换，以及**推动调度器**按钮，这样你就不必等待下一个 60 秒 tick。
+- **治理面板** —— 一个可折叠的操作员区域（见下文）：预算与成本、待处理审批、阻塞收件箱、项目汇总、看门狗/工作流状态与运行中进度。
 
 视觉上目标是熟悉的 Linear / Fusion 布局：深色主题、带计数的列标题、彩色状态点、优先级和租户的标签芯片。插件只读取主题 CSS 变量（`--color-*`、`--radius`、`--font-mono` 等），因此它会随活动的仪表盘主题自动重新换肤。
+
+### 治理面板 {#governance-panel}
+
+编排面板下方，折叠的 **▸ Governance** 链接展开为看板治理内核的操作员界面。它是只读为主的：唯一的写操作是人工审批决策（**批准 / 要求修订 / 拒绝**，可附注释），通过与 CLI 相同的 `decide` 内核 POST —— 漂移的主体显示为 `invalidated` 且不可决策（409）、自批准被拒绝（403）、worker 上下文永远无法决策（403）、双击只会得到当前状态（409），绝不会产生第二次决策。其余治理操作（设置预算、请求审批、创建看门狗、应用工作流模板）仍完全通过 CLI / worker 工具进行。六个标签页：**审批**（最新在前，任务主体可直接链接进任务抽屉）、**阻塞收件箱**（确定性排序：严重性降序、然后按时间，含每行 SLA 与行动所有者，过滤器 fail-closed）、**预算与成本**（按范围分行的 MTD 已知支出、限额、警告比率与状态；无计量成本的运行显示为明确的"未知"，绝不按 $0 解释）、**运行中进度**（结构化心跳的 phase / 百分比 / 速率 / ETA；未知值渲染为"ETA unknown"等明确标记，绝不虚构；载荷来自有界的、密钥脱敏的活动快照允许列表 —— worker pid、认领锁、运行元数据、任务正文与结果绝不会到达浏览器）、**看门狗与工作流**（看门狗行 + 近期触发账本 + 已验证的工作流模板；面板从不触发检查）与**项目**（选取项目后的只读汇总：状态计数、完成率、已知 MTD 成本、管辖预算与项目目标）。面板跟随看板切换器，仅在展开时以 15 秒间隔轮询（看板现有的 WebSocket 流与重载节奏不受影响），卡片布局在窄视口下响应式折叠 —— 无需单独的手机应用。完整翻译（DE/EN；每个标签都有英文兜底）。CLI 对等：面板显示的一切也都在 CLI 上 —— `hermes kanban budget`、`hermes kanban approval`、阻塞收件箱、`hermes kanban watchdog` 与项目汇总动词。
 
 ### 自动与手动编排 {#auto-vs-manual-orchestration}
 
@@ -493,6 +498,15 @@ GUI 严格是一个**通过 DB 读取 + 通过 kanban_db 写入**的层，没有
 | `DELETE` | `/links?parent_id=…&child_id=…` | 删除依赖关系 |
 | `POST` | `/dispatch?max=…&dry_run=…` | 推动调度器 —— 跳过 60 秒等待 |
 | `GET` | `/config` | 从 `config.yaml` 读取 `dashboard.kanban` 偏好设置 —— `default_tenant`、`lane_by_profile`、`include_archived_by_default`、`render_markdown` |
+| `GET` | `/governance/budget?period=YYYY-MM` | 看板当月（或给定月份）的成本/预算状态：按范围分行（board / tenant / project / profile），含 MTD、限额、警告比率、状态与使用统计。格式错误的 period → 400 |
+| `GET` | `/governance/approvals?status=…&type=…` | 看板全部审批，最新在前；开放行在读取时做漂移检查（已变更的主体显示 `invalidated`） |
+| `GET` | `/governance/approvals/:id` | 单个审批（开放时漂移检查）；其他看板的行返回 404 |
+| `POST` | `/governance/approvals/:id/decide` | 人工决策 —— `approve` / `reject` / `revise`（+ 可选注释，`via: dashboard`）。内核围栏完整保留：worker 上下文 403、自批准 403、漂移 409 且请求作废、重复决策 409 |
+| `GET` | `/governance/inbox?severity=…&source=…&block_kind=…&limit=…` | 阻塞收件箱 —— 阻塞任务 + 待处理审批 + 开放评审，按严重性降序 → 时间降序排序，含 SLA 区间；过滤器 fail-closed（未知值 400） |
+| `GET` | `/governance/projects/rollup?project_id=…` | 单个项目的只读汇总：状态、进度、已知 MTD 成本、管辖预算 + 目标；未知项目 → 400 |
+| `GET` | `/governance/watchdogs?status=…` | 看门狗行（评审者/指令）+ 近期触发账本 + `enabled` 标志；从不触发检查 |
+| `GET` | `/governance/workflows` | 看板已验证的工作流模板（角色而非具体配置文件）；只读 |
+| `GET` | `/governance/progress` | 运行中任务及其结构化进度（phase / 百分比 / 速率 / ETA），通过有界的、密钥脱敏的活动允许列表投影；未知字段保持 `null` |
 | `WS` | `/events?since=<event_id>` | `task_events` 行的实时流 |
 
 每个处理器都是一个薄封装 —— 插件约 700 行 Python（路由器 + WebSocket 追踪 + 批量处理器 + 配置读取器），不添加任何新的业务逻辑。一个微型 `_conn()` 辅助函数在每次读写时自动初始化 `kanban.db`，因此无论用户是先打开仪表盘、直接访问 REST API，还是运行 `hermes kanban init`，全新安装都能正常工作。
@@ -534,7 +548,7 @@ WebSocket 额外增加了一步：它要求仪表盘的临时会话 token 作为
 
 ### 范围边界
 
-GUI 是刻意精简的。插件所做的一切都可以从 CLI 访问；插件只是让人类使用起来更舒适。自动分配、预算、治理门控和组织图视图仍然是用户空间 —— 一个路由器配置文件、另一个插件，或对 `tools/approval.py` 的复用 —— 正如设计规范的范围外章节所列。
+GUI 是刻意精简的。插件所做的一切都可以从 CLI 访问；插件只是让人类使用起来更舒适。治理面板遵循同样的规则：它通过治理内核（`kanban_approvals`、`kanban_cost`、`kanban_inbox`、`kanban_projects`、`kanban_watchdog`、`kanban_workflows`）渲染与决策，而不是重新实现任何门控 —— 预算执行、审批请求与看门狗创建仍留在 CLI / worker 界面上。自动分配和组织图视图仍然是用户空间 —— 一个路由器配置文件、另一个插件，或对 `tools/approval.py` 的复用。
 
 ## CLI 命令参考
 

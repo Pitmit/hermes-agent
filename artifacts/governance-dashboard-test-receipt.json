@@ -1,0 +1,38 @@
+{
+  "task": "t_0668f010",
+  "stage": "Governance P1-B2: Governance-Dashboard und responsive Inboxes",
+  "base_sha": "b5c6124c4b",
+  "branch": "feat/kanban-governance-p0",
+  "commit_message": "feat: add kanban governance dashboard",
+  "generated_at": "2026-09-30T14:36:37Z",
+  "test_host": "vm-worker-gen (VM124, 10.10.10.124), disposabler TEST_ROOT unter /var/tmp (mktemp), frischer pm.build_env-Venv + node v22.23.3 + HOME/HERMES_HOME/Caches unter TEST_ROOT, trap-cleanup mit Beweis (EXISTS_AFTER=no)",
+  "phases": {
+    "fast_liveness": "node --check Bundle + node Probe-Fixture (severity sort, decision gating, Doppelclick-Fence, ETA-unknown) + py_compile: OK",
+    "py": "pm.build_env (dev+test) -> VENV_IMPORT_OK (alle 9 /governance-Routen registriert, Kernel-Module importierbar) -> run_tests.sh NEW/PLUGIN/KERNEL -> ruff",
+    "fe": "node v22.23.3 (engines ^22.22.0) -> rsync -R Staging -> npm install (Root) -> tsc -b --force + Negative Kontrolle -> vitest run -> eslint . -> SPA build (scripts/build/web.mjs)"
+  },
+  "results": {
+    "new_tests": "tests/plugins/test_kanban_governance_dashboard.py: 21 tests passed, 0 failed (21 Testfunktionen, inkl. Node-Probe des Bundles: govSortInboxRows severity-desc + ref-tiebreak pur, govDecisionEnabled nur pending/revision_requested, govBeginDecision Doppelclick-Fence null, govProgressParts 'ETA unknown' statt erfunden, govFmtEta-Banden, Pill-Klassen)",
+    "plugin_regression": "12 bestehende Kanban-Dashboard-Plugin-Suiten: 91 tests passed, 0 failed (UX nicht regressiert: Board-API, Attachments, Done-Order, Events-Tail, Estimate, Links, Model-Override, Read-Admission, WS-Idle, task-updated-Hook)",
+    "kernel_regression": "35 Governance-Kernel-/Surrounding-Suiten: 635 tests passed, 0 failed, 5 skipped (approvals drift/decide-Fences, inbox severity/SLA, cost budget, projects rollup, watchdog, workflows, activity projection + redaction, tools, tui contracts; 5 Skips = platforms('windows')-Lane-Skips)",
+    "ruff": "All checks passed (plugin_api.py + neue Test-Datei)",
+    "web_typecheck": "tsc -b --force rc=0; Negative Kontrolle rc=2 (bewusstes TypeError in de.ts laesst das Gate FAILen — Beweis, dass es real prueft); npm run typecheck (tsc -p .) ist VAKUAT (solution tsconfig + --noEmit prueft nichts) und wurde NICHT als Gate verwendet",
+    "web_vitest": "353 passed (353)",
+    "web_lint": "eslint: 0 errors, 26 warnings (alle Warnings vorbasiert, keine aus den geaenderten i18n-Dateien; react-refresh/only-export-components steht bewusst auf 'warn')",
+    "web_build": "SPA build rc=0 (scripts/build/web.mjs), hermes_cli/web_dist/index.html erzeugt",
+    "git_diff_check_rc": 0,
+    "no_leftovers": "EXISTS_AFTER=no, TEST_ROOT removed, FREE_AFTER_KB reclaimed",
+    "free_kb_before": 115178404,
+    "py_phase_exit": 0,
+    "fe_phase_exit": 0
+  },
+  "commands": [
+    "bash artifacts/run-governance-dashboard-tests.sh",
+    "node tests/plugins/fixtures/kanban_governance_probe.js plugins/kanban/dashboard/dist/index.js",
+    "scripts/run_tests.sh tests/plugins/test_kanban_governance_dashboard.py -q",
+    "scripts/run_tests.sh <12 Plugin-Suiten> <35 Kernel-Suiten> -q",
+    "ruff check plugins/kanban/dashboard/plugin_api.py tests/plugins/test_kanban_governance_dashboard.py",
+    "cd web && npx tsc -b --force (+ Negative Kontrolle) && npm run test && npm run lint && npm run build",
+    "git diff --check"
+  ]
+}
