@@ -488,6 +488,10 @@ def test_no_approval_without_stable_subject(kanban_home):
 
 def test_budget_approval_needs_stable_budget_row(kanban_home):
     conn = _connect()
+    # The period under test is derived from the clock, not hardcoded: a
+    # literal month goes stale at the month boundary (set_budget defaults to
+    # the current month, so a fixed period stops matching it on the 1st).
+    period = kc.current_period()
     # No period -> refused.
     with pytest.raises(ValueError, match="--period"):
         _request(conn, type="budget", subject_kind="budget",
@@ -495,11 +499,12 @@ def test_budget_approval_needs_stable_budget_row(kanban_home):
     # No budget row -> refused (no approval without a stable subject).
     with pytest.raises(ValueError, match="no stable subject"):
         _request(conn, type="budget", subject_kind="budget",
-                 subject_ref="profile:alice", period="2026-09")
-    kc.set_budget(conn, board=_board_slug(), scope="profile", ref="alice", limit_usd=5.0)
+                 subject_ref="profile:alice", period=period)
+    kc.set_budget(conn, board=_board_slug(), scope="profile", ref="alice",
+                  limit_usd=5.0, period=period)
     result = _request(conn, type="budget", subject_kind="budget",
-                      subject_ref="profile:alice", period="2026-09")
-    assert result["period"] == "2026-09"
+                      subject_ref="profile:alice", period=period)
+    assert result["period"] == period
     assert result["subject_id"] == "profile:alice"
     # Changing the limit drifts the subject -> decision invalidates.
     kc.set_budget(conn, board=_board_slug(), scope="profile", ref="alice", limit_usd=9.0)
