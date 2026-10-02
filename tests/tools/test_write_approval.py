@@ -186,12 +186,17 @@ def _review_stages_remove(shape):
         assert store.add("memory", entry)["success"]
     op = {"action": "remove", "old_text": "Staging DB"}
     kwargs = op if shape == "single" else {"operations": [op, {"action": "add", "content": "Deploys via make ship"}]}
+    import hermes_cli.config as cfg
+    previous_config = cfg.load_config()
     origin, attended = set_current_write_origin("background_review"), set_review_attended(False)
     try:
+        # Only the review stages; later foreground edits must use the original policy.
+        _set_approval("memory", True)
         staged = json.loads(memory_tool(target="memory", store=store, **kwargs))
     finally:
         reset_review_attended(attended)
         reset_current_write_origin(origin)
+        cfg.save_config(previous_config)
     assert staged["staged"] is True, staged
     return store, staged["pending_id"]
 
