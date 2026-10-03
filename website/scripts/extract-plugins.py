@@ -179,7 +179,7 @@ def load_git_dates(catalog_dir: Path) -> dict[str, dict[str, str]]:
     when = ""
     for line in log.splitlines():
         if line.startswith("\x00"):
-            when = line[1:].strip()
+            when = datetime.fromisoformat(line[1:].strip()).astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
             continue
         parts = line.split("\t")
         if len(parts) < 2 or not when:

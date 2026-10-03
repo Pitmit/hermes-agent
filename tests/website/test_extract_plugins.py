@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -285,6 +287,96 @@ def test_git_dates_added_is_first_commit_updated_is_last_and_renames_keep_added(
     by_name = {e["name"]: e for e in entries}
     assert by_name["alpha"]["addedAt"] == "2026-01-01T00:00:00Z"
     assert by_name["alpha"]["updatedAt"] == "2026-02-01T00:00:00Z"
+
+
+def test_git_dates_normalize_offsets_preserve_epochs_rename_and_lexical_order(mod, tmp_path):
+    repo = tmp_path / "repo"
+    catalog = repo / "plugin-catalog"
+    catalog.mkdir(parents=True)
+    added_early = "2026-01-01T00:30:00+02:00"
+    added_later = "2025-12-31T18:00:00-05:00"
+    renamed = "2026-01-01T04:30:00+05:30"  # Same instant as added_later.
+    updated = "2025-12-31T20:00:00-04:00"
+    _git(repo, "init", "-q", "-b", "main", date=added_early)
+    _write_entry(catalog, "early")
+    _git(repo, "add", ".", date=added_early)
+    _git(repo, "commit", "-q", "-m", "add early", date=added_early)
+    _write_entry(catalog, "later")
+    _git(repo, "add", ".", date=added_later)
+    # The author timestamp must not become the catalog's landing timestamp.
+    _git(repo, "commit", "-q", "-m", "add later", "--date=2020-01-01T00:00:00+00:00", date=added_later)
+    _git(repo, "mv", "plugin-catalog/early.yaml", "plugin-catalog/renamed.yaml", date=renamed)
+    _git(repo, "commit", "-q", "-m", "rename", date=renamed)
+
+    before_update = mod.load_git_dates(catalog)
+    assert before_update["renamed.yaml"]["updatedAt"] == before_update["later.yaml"]["addedAt"]
+    _write_entry(catalog, "early", sha="a" * 40).replace(catalog / "renamed.yaml")
+    _git(repo, "commit", "-q", "-am", "bump", date=updated)
+    native_history = subprocess.run(
+        ["git", "log", "--format=%s%x09%ct%x09%at"], cwd=repo,
+        capture_output=True, text=True, check=True, timeout=30,
+    ).stdout
+    epochs = {subject: (int(committer), int(author))
+              for subject, committer, author in (line.split("\t") for line in native_history.splitlines())}
+    assert epochs["add later"][0] != epochs["add later"][1]
+    assert epochs["add later"][0] == epochs["rename"][0]
+
+    dates = mod.load_git_dates(catalog)
+    assert "early.yaml" not in dates
+    assert dates["renamed.yaml"]["addedAt"] == "2025-12-31T22:30:00Z"
+    assert dates["renamed.yaml"]["updatedAt"] == "2026-01-01T00:00:00Z"
+    for name, field, subject in (
+        ("renamed.yaml", "addedAt", "add early"), ("renamed.yaml", "updatedAt", "bump"),
+        ("later.yaml", "addedAt", "add later"), ("later.yaml", "updatedAt", "add later"),
+    ):
+        value = dates[name][field]
+        assert value.endswith("Z")
+        assert datetime.fromisoformat(value).timestamp() == epochs[subject][0]
+    added_inputs = {"renamed.yaml": added_early, "later.yaml": added_later}
+    chronological = sorted(added_inputs, key=lambda name: datetime.fromisoformat(added_inputs[name]).timestamp())
+    assert sorted(added_inputs, key=added_inputs.__getitem__) != chronological
+    assert sorted(dates, key=lambda name: dates[name]["addedAt"]) == chronological
+
+    out_dir = tmp_path / "api"
+    assert mod.main(catalog_dir=catalog, output_dir=out_dir) == 0
+    published = {entry["name"]: entry for entry in json.loads((out_dir / "plugins.json").read_text())}
+    for name, file_name in (("early", "renamed.yaml"), ("later", "later.yaml")):
+        for field in ("addedAt", "updatedAt"):
+            assert published[name][field] == dates[file_name][field]
+
+
+@pytest.mark.parametrize("fallback", ["shallow", "git-unavailable"])
+def test_git_dates_fallbacks_keep_published_dates_null(mod, tmp_path, fallback):
+    repo = tmp_path / "repo"
+    catalog = repo / "plugin-catalog"
+    catalog.mkdir(parents=True)
+    date = "2026-01-01T00:30:00+02:00"
+    _git(repo, "init", "-q", "-b", "main", date=date)
+    _write_entry(catalog, "alpha")
+    _git(repo, "add", ".", date=date)
+    _git(repo, "commit", "-q", "-m", "add", date=date)
+    _write_entry(catalog, "alpha", sha="a" * 40)
+    _git(repo, "commit", "-q", "-am", "bump", date="2026-02-01T00:00:00-05:00")
+    if fallback == "shallow":
+        clone = tmp_path / "shallow"
+        subprocess.run(
+            ["git", "clone", "--quiet", "--depth", "1", repo.as_uri(), str(clone)],
+            check=True, capture_output=True, timeout=30,
+        )
+        catalog = clone / "plugin-catalog"
+        assert mod.load_git_dates(catalog) == {}
+    out_dir = tmp_path / "api"
+    result = subprocess.run(
+        [sys.executable, str(EXTRACT), "--catalog-dir", str(catalog), "--output-dir", str(out_dir)],
+        env={"HOME": str(tmp_path), "PATH": "" if fallback == "git-unavailable" else os.environ["PATH"],
+             "TZ": "UTC", "LANG": "C.UTF-8"},
+        capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    assert ("shallow checkout" if fallback == "shallow" else "git history unavailable") in result.stderr
+    entries = json.loads((out_dir / "plugins.json").read_text())
+    assert len(entries) == 1 and entries[0]["name"] == "alpha"
+    assert entries[0]["addedAt"] is None and entries[0]["updatedAt"] is None
 
 
 def test_git_dates_are_null_outside_a_repository(mod, tmp_path):
