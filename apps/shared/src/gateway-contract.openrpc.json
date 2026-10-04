@@ -16575,6 +16575,395 @@
         "title": "InterruptStatus",
         "type": "string"
       },
+      "KanbanActivityBoard": {
+        "additionalProperties": false,
+        "properties": {
+          "board": {
+            "title": "Board",
+            "type": "string"
+          },
+          "checked_at": {
+            "title": "Checked At",
+            "type": "integer"
+          },
+          "roots": {
+            "items": {
+              "$ref": "#/components/schemas/KanbanActivityTask"
+            },
+            "title": "Roots",
+            "type": "array"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error"
+          }
+        },
+        "required": [
+          "board",
+          "checked_at"
+        ],
+        "title": "KanbanActivityBoard",
+        "type": "object"
+      },
+      "KanbanActivityParams": {
+        "additionalProperties": false,
+        "properties": {
+          "boards": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Boards"
+          }
+        },
+        "title": "KanbanActivityParams",
+        "type": "object"
+      },
+      "KanbanActivityResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "boards": {
+            "items": {
+              "$ref": "#/components/schemas/KanbanActivityBoard"
+            },
+            "title": "Boards",
+            "type": "array"
+          },
+          "active_count": {
+            "default": 0,
+            "title": "Active Count",
+            "type": "integer"
+          },
+          "attention_count": {
+            "default": 0,
+            "title": "Attention Count",
+            "type": "integer"
+          },
+          "checked_at": {
+            "title": "Checked At",
+            "type": "integer"
+          },
+          "diagnostics": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Diagnostics",
+            "type": "array"
+          }
+        },
+        "required": [
+          "checked_at"
+        ],
+        "title": "KanbanActivityResponse",
+        "type": "object"
+      },
+      "KanbanActivityRun": {
+        "additionalProperties": false,
+        "properties": {
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Run Id"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profile"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Started At"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Ended At"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Outcome"
+          },
+          "last_heartbeat_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Last Heartbeat At"
+          },
+          "max_runtime_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Max Runtime Seconds"
+          },
+          "phase": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Phase"
+          },
+          "completed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Completed"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Total"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Unit"
+          },
+          "rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Rate"
+          },
+          "eta_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Eta Seconds"
+          },
+          "error_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error Count"
+          },
+          "progress_pct": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Progress Pct"
+          },
+          "progress_updated_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Progress Updated At"
+          }
+        },
+        "title": "KanbanActivityRun",
+        "type": "object"
+      },
+      "KanbanActivityTask": {
+        "additionalProperties": false,
+        "properties": {
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/KanbanTaskStatus"
+          },
+          "assignee": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Assignee"
+          },
+          "block_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Block Reason"
+          },
+          "parents": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Parents",
+            "type": "array"
+          },
+          "children": {
+            "items": {
+              "$ref": "#/components/schemas/KanbanActivityTask"
+            },
+            "title": "Children",
+            "type": "array"
+          },
+          "run": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/KanbanActivityRun"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "task_id",
+          "title",
+          "status"
+        ],
+        "title": "KanbanActivityTask",
+        "type": "object"
+      },
+      "KanbanTaskStatus": {
+        "enum": [
+          "triage",
+          "todo",
+          "scheduled",
+          "ready",
+          "running",
+          "blocked",
+          "review",
+          "done",
+          "archived"
+        ],
+        "title": "KanbanTaskStatus",
+        "type": "string"
+      },
       "LanguageOption": {
         "additionalProperties": false,
         "description": "``agent.i18n_languages.language_options`` row. ``source`` is ``bundled``, ``overlay`` or\n``plugin:<name>`` \u2014 the highest layer that supplies the language.",

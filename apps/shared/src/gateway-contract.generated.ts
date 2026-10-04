@@ -1821,6 +1821,52 @@ export interface I18nCatalogResult {
   surface: LocaleSurface
   messages: Record<string, string>
 }
+export interface KanbanActivityParams {
+  boards?: string[] | null
+}
+export interface KanbanActivityResponse {
+  boards?: KanbanActivityBoard[]
+  active_count?: number
+  attention_count?: number
+  checked_at: number
+  diagnostics?: string[]
+}
+export interface KanbanActivityBoard {
+  board: string
+  checked_at: number
+  roots?: KanbanActivityTask[]
+  truncated?: boolean
+  error?: string | null
+}
+export interface KanbanActivityTask {
+  task_id: string
+  title: string
+  status: KanbanTaskStatus
+  assignee?: string | null
+  block_reason?: string | null
+  parents?: string[]
+  children?: KanbanActivityTask[]
+  run?: KanbanActivityRun | null
+}
+export type KanbanTaskStatus = 'triage' | 'todo' | 'scheduled' | 'ready' | 'running' | 'blocked' | 'review' | 'done' | 'archived'
+export interface KanbanActivityRun {
+  run_id?: number | null
+  profile?: string | null
+  started_at?: number | null
+  ended_at?: number | null
+  outcome?: string | null
+  last_heartbeat_at?: number | null
+  max_runtime_seconds?: number | null
+  phase?: string | null
+  completed?: number | null
+  total?: number | null
+  unit?: string | null
+  rate?: number | null
+  eta_seconds?: number | null
+  error_count?: number | null
+  progress_pct?: number | null
+  progress_updated_at?: number | null
+}
 export type PingParams = Record<string, never>
 export interface PingResult {
   pong: boolean
