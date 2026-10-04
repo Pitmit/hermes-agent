@@ -1,0 +1,189 @@
+{
+  "task": "t_8cfd4c85",
+  "review": "Governance Gate: unabhaengiger Architektur-, Security- und Testreview",
+  "verdict": "GO",
+  "reviewed_by": "worker-spec (VM125, vm-worker-spec, Run 222)",
+  "reviewed_at_utc": "2026-10-04T06:30:00Z",
+  "independence": "Reviewer verfasste die Spezifikation, schrieb keinen Implementierungscode; Diff, Kommentare und Receipts wurden als Daten behandelt. Keine Quell-, Test- oder Doku-Datei geaendert. Einziger eigener Commit: diese zwei Review-Artefakte.",
+  "scope": {
+    "historical_diff": "bb0785e73b0154fcffb449c2f2319d7e49597c18..370f02c562fd4ebfe6738a47a377c89af2b9f732 (16 Commits, 92 Dateien, +19076/-134)",
+    "live_base_relative": "bffb12a6cec643bc0b80bdffc33b8cbb95f67489..370f02c562fd4ebfe6738a47a377c89af2b9f732 (14 Commits, 86 Dateien; 13 Governance-Patches + 1 Spec-Commit dd08215033; Lifecycle-Guard b371923540 und Review-Doku bffb12a6ce bereits in der Live-Basis)",
+    "source_head": "370f02c562fd4ebfe6738a47a377c89af2b9f732",
+    "source_head_tree": "d97011d58fa62571af7ed3abd6d69255159a935a",
+    "source_head_committed": "2026-10-03T01:56:33+00:00",
+    "live_base_correct_sha": "bffb12a6cec643bc0b80bdffc33b8cbb95f67489",
+    "working_tree": "sauber bzgl. getrackter Dateien (git status --porcelain: 0 modifizierte getrackte Dateien; nur ungetrackte artifacts/)"
+  },
+  "reviewed_commits": [
+    "370f02c562fd4ebfe6738a47a377c89af2b9f732",
+    "d235fc25bff525287614b50a2060b63627648a15",
+    "a3a1f67a12",
+    "13b9bd1a8c",
+    "41eab20d66",
+    "f0d430dfce",
+    "d6541325df",
+    "44e1ac994d",
+    "5c97499316",
+    "06af45a14d",
+    "2b4bec7c7f",
+    "13a07e2350",
+    "efa41eea2d",
+    "dd08215033",
+    "bffb12a6ce",
+    "b371923540"
+  ],
+  "gates": {
+    "1_scope_architecture": {
+      "verdict": "PASS",
+      "evidence": [
+        "Hermes bleibt einzige Control Plane: Routines (cron/kanban_routine.py) materialisieren Occurrences als normale kanban-Tasks ueber den cron-Occurrence-Ledger (#107485) — keine zweite Scheduler-Engine, kein Dispatcher-Loop-Anteil; run_kanban_routine_job haengt als Short-Circuit in _prepare_job_prompt.",
+        "Kein zweiter Ledger: task_run_costs/kanban_budgets/approvals/… leben im Board-DB-Schema (kanban_db.SCHEMA_SQL, einzige Quelle); Kostenfluss laeuft durch den einen Session-Flush-Pfad (cli_shutdown._flush_one_shot_session_store -> worker_run_cost_flush).",
+        "Migration rueckwaertskompatibel: additive Spalten (_LATER_TASK_COLUMNS/_TASK_RUN_COLUMNS), INSERT-OR IGNORE-Seeds (backfill unknown-Kosten, 5 Referenz-Templates), idx_tasks_project; Inbox faellt auf sqlite3.OperationalError-freien Pfad fuer Pre-Stage-2-Boards zurueck; alte Karten/Rows bleiben lesbar (Legacy-Synthese-Tests gruen).",
+        "Alle Governance-Flags default-off (config_defaults.py: budgets.enabled/approvals.enabled/watchdog.enabled/watchdog.tick_enabled = False) -> Flags-off-Ticks laut Codepfad byte-identikal, unterstuetzt durch Baseline-Suite ohne neue Fehler."
+      ]
+    },
+    "2_security": {
+      "verdict": "PASS",
+      "evidence": [
+        "Board-Fencing: approvals/watchdogs/inbox/rollup filtern hart auf board; Worker-Tools haben bewusst keinen board-Override (kanban_approval_request/kanban_project_rollup/kanban_inbox/kanban_watchdog_*); decide_approval lehnt fremde board-Zeilen fail-closed ab (kanban_approvals.py:508-512).",
+        "Approval-Autorisierung: kein Decide-Tool fuer Worker; decide_approval verweigert Worker-Kontext (HERMES_KANBAN_TASK, kanban_approvals.py:412-425) und Selbstfreigabe (approver==requester, :537-540); concurrent decision ueber rowcount-Guard (:543-552).",
+        "Drift-Invalidierung fail-closed: Fingerprint immer server-seitig (resolve_subject), Invalidierung bei subject_drift/subject_unresolvable mit exactly-once Event (status-IN-open-Guard :290-302); Invalidierung committet auch bei verweigerter Entscheidung (:502-526); Lese-Seite refresht Drift (get_approval/list_approvals), Inbox-Projektion schreibt dagegen bewusst nichts.",
+        "SQL: alle Werte parameterisiert; f-Strings nur fuer konstante Tabellen-/Spaltennamen (LEDGER/BUDGET/APPROVAL/WATCHDOG-Tabellen, _PROGRESS_COLUMNS-Mapping); LIKE in bound_tasks bindet nur das DB-seitige ap_-Id (kanban_approvals.py:438-443).",
+        "Watchdog-Independence: Reviewer != Assignee/Implementer bei Create und Decide; via='tool' nur der Watchdog-eigene Reviewer; geschlossenes Verb-Vokabular, kein Reparatur-Verb; reopen verweigert needs_input/capability (kanban_watchdog.py:787-791).",
+        "Keine ungebundene externe Mutation: Budget-Gate/Watchdog-Tick fail-open dokumentiert, Inbox pur read-only, set_block_sla advisiv; delegated-child-Mutation-Fence auf approval_request/watchdog_create/watchdog_decide; kein hardkodiertes ~/.hermes in den 7 neuen Modulen (grep leer)."
+      ]
+    },
+    "3_correctness": {
+      "verdict": "PASS",
+      "evidence": [
+        "unknown cost != 0: Backfill/Flush schreiben cost_status='unknown' mit NULL-Betraegen (kanban_cost.py:133-260); MTD-Summen zaehlen nur estimated/actual (:415-472); unknown_runs/unknown_share ehrlich; session_spend_totals diskriminiert ueber cost_status, nie NULL->0 (hermes_state_usage.py:420-483).",
+        "Hard Budget stoppt VOR Spawn: budget_gate pre-claim in _dispatch_lane_task (kanban_db_dispatch.py Diff @@ -2149): Karte bleibt ready, kein Block, Re-Evaluation pro Tick; Review-Lane-Spiegel verhindert Reservierungsverbrauch (_any_spawnable_review).",
+        "Laufender Run nicht getoetet: Budget-Gate haelt nur Spawns; Watchdog/Endstufen greifen nur bei status IN ('review','blocked') (check_watchdogs :484-495, _escalate_sticky :563-569); enforce_max_runtime unveraendert.",
+        "Watchdog exactly-once: UNIQUE(watchdog_id,fingerprint)+INSERT-Race-Verlust no-op (:496-521); Rounds deduped per stop_event_id mit rowcount-Guard (:526-545); Sticky-Eskalation einmalig (escalated_at IS NULL-Guard :556-562); Eskalation routes nur review/blocked -> triage.",
+        "Unveraenderte Loops eskalieren: identische Rounds zaehlen bis WATCHDOG_ROUND_LIMIT=3 -> triage sticky; zusaetzlich deterministischer Lifecycle-Loop-Guard (tool_guardrails.py: LIFECYCLE_IDENTICAL_FAILURE_BLOCK_AFTER=3, wirkt auch auf warn-only Konfigs; Progress-Reset bei Mutation bleibt).",
+        "Cron/Template idempotent/race-free: deterministische Occurrence-Keys routine:{job_id}:{scheduled_instant}, Custom-Key-Muss-{scheduled_instant}, catch-up gebunden (<=20), all-bounded stoppt an Gap-Grenze; Workflow-Apply atomar in einem write_txn mit in-txn Re-Check (BEGIN IMMEDIATE serialisiert Applier), Cycle-Guard, _recover_chain fail-closed.",
+        "Project-Rollups rechnerisch korrekt: eine GROUP-BY-Passung, done_ratio=done/(done+open), MTD nur estimated/actual, Budget-Präzedenz exakte Periode > persist konsistent mit Gate (kanban_projects.py:359-450).",
+        "Sticky Gates bleiben sticky: _unblock_task_in_txn ist byte-gleiche Extraktion der bestehenden unblock_task-Logik (block_kind/block_recurrences ueberleben); Watchdog-reopen verweigert Human Gates; Approval-Freigabe nur via menschliche Entscheidung auf exakte approval:<id>-Bindung (latest blocked event)."
+      ]
+    },
+    "4_ux_api": {
+      "verdict": "PASS",
+      "evidence": [
+        "Inbox fail-closed: ungueltige severity/source/kind/limit (inkl. limit 0) -> ValueError vor jeder Query; deterministische Ordnung (severity desc, age desc, ref asc), bounded [1..500].",
+        "Doppelte Aktionen idempotent: Approval-Request dedupliziert identische offene Requests (gleiche id zurueck); Decision-Replay -> ApprovalStateError ohne Event; Watchdog-Decision exactly-once pro Firing; Budget-Events dedupliziert per (task,period); Workflow-Retry liest gleiche Kette zurueck.",
+        "Progress bounded + ETA nicht erfunden: normalize_progress_heartbeat fail-closed vor jedem Write (negativ/NaN/bool/nicht-ganzzahlig/completed>total/total=0&completed>0/unknown fields); progress_pct nur bei total>0; eta_seconds NULL wenn nicht gesendet, nie aus rate erfunden; phase/unit bounded+redigiert (Tool-Layer _redact).",
+        "kanban_complete: summary Pflicht mit sichtbarem, korrigierbarem Fehler; kein auto-inventiertes Result."
+      ]
+    },
+    "5_evidence": {
+      "verdict": "PASS",
+      "parent_receipt": {
+        "task": "t_aff92192",
+        "receipt": "artifacts/baseline-relative/receipt.json",
+        "verified": [
+          "SHA256-Spot-Checks 3/3 gegen On-Disk-Artefakte (head-summary.txt, gitleaks-delta.json, ruff-changed-head.txt) byte-identisch",
+          "Base ist Ancestor von HEAD (git merge-base --is-ancestor mit korrigiertem Voll-SHA, s. F-01)",
+          "Vollsuite BASE: 5112 Dateien/53140 passed/281 failed/726 skipped; HEAD: 5122/53417/274/726; new=0, preexisting=611, fixed=7 (IDs geprueft)",
+          "FE-Gates web/ui-tui/apps/shared identisch gruen auf BASE und HEAD inkl. Branch-Region kanbanActivity (nur Lauf 3 zaehlt; Laeufe 1+2 als Infra-Vorfaelle dokumentiert)",
+          "gitleaks 8.30.1 Delta: 3 Funde, alle triagiert nicht-geheim (Testfixture/Platzhalter/Redaktions-Probe), 0 echt, 0 UNKNOWN",
+          "ruff rc=0 auf 45 geaenderten .py; git diff --check sauber"
+        ],
+        "caveat": "F-01: base.sha im Receipt enthaelt einen Transkriptionsfehler (1 Hex-Zeichen); Testergebnisse bleiben gueltig, da der Clone den korrekt aufloesenden Kurz-SHA nutzte."
+      },
+      "independent_tests_vm125": {
+        "host": "vm-worker-spec (VM125), System-Python 3.12.3, SQLite 3.45.1, pytest 7.4.4; croniter==6.0.0 (projekt-deklarierte Kern-Abhaengigkeit, Wheel nach /tmp entpackt); keine neue schwere Toolchain",
+        "results": [
+          "tests/hermes_cli/test_kanban_approvals.py + test_kanban_cost_budget.py: 49 passed",
+          "tests/hermes_cli/test_kanban_inbox.py + test_kanban_projects.py + test_kanban_watchdog.py: 65 passed",
+          "tests/hermes_cli/test_kanban_workflows.py + test_kanban_progress_heartbeat.py: 54 passed, 2 failed (F-03: SQLite-3.45.1-DROP-COLUMN-Artefakt im Test-Helper; beide Tests auf Ziel-Runtime laut Parent-Suite gruen)",
+          "tests/cron/test_kanban_routine.py: 59 passed (12 CLI-Tests initial nur wegen fehlendem croniter im System-Python rot -> env-bedingt, nach croniter komplett gruen)",
+          "tests/hermes_state/test_session_spend_totals.py + tests/agent/test_kanban_lifecycle_loop_guard.py: 19 passed",
+          "tests/tools/test_kanban_complete_summary_required.py: 9 passed",
+          "tests/tools/test_kanban_redaction.py + test_kanban_tools.py + test_write_approval.py: 70 passed",
+          "tests/plugins/test_kanban_governance_dashboard.py: lokal nicht ausfuehrbar (fastapi fehlt, keine schwere Toolchain erlaubt) — abgedeckt durch Parent-Receipt A1/A2 und artifacts/governance-dashboard-test-receipt.json"
+        ]
+      },
+      "stage_receipts": "9 Stufen-Receipts (approval/blocked-inbox/cost-budget/dashboard/progress-heartbeat/project-rollup/routine/watchdog/workflow-template) als historische Evidenz geprueft: binden jeweils base_sha/branch/commit_message/changed_files/test_host, inhaltlich plausibel; aktuelle Fullsuite-Gueltigkeit stammt allein aus dem frischen Parent-Receipt."
+    }
+  },
+  "findings": [
+    {
+      "id": "F-01",
+      "severity": "medium",
+      "disposition": "non-blocking, dokumentiert; Cutover-Kind verwendet bereits den korrekten SHA",
+      "area": "provenance",
+      "file": "artifacts/baseline-relative/receipt.json",
+      "line": 6,
+      "finding": "base.sha im Parent-Receipt (und in Orchestrator-Kommentaren) enthaelt einen falschen Hex-Wert an Index 27: 'bffb12a6cec643bc0b80bdffc33c8cbb95f67489' statt korrekt 'bffb12a6cec643bc0b80bdffc33b8cbb95f67489' (git rev-parse bffb12a6).",
+      "evidence": "Zeichenweiser Vergleich im Review-Lauf (Diff an idx 27); git rev-parse bffb12a6 -> ...c33b8...; Cutover-Karte t_268a9a0f nutzt den korrekten SHA (...c33b8...).",
+      "impact": "Wer gegen die Receipt-Zeichenkette verifiziert, scheitert fail-closed oder muesste still korrigieren. Testergebnisse unberuehrt (Clone resolvierte Kurz-SHA korrekt).",
+      "required_action": "Cutover und spaetere Verifikationen duerfen den Receipt-String nicht unprueft uebernehmen; massgeblich ist source_head/live_base_correct_sha in diesem Review bzw. git selbst."
+    },
+    {
+      "id": "F-02",
+      "severity": "low",
+      "disposition": "non-blocking, Folge-Haertung empfohlen",
+      "area": "secret/redaction consistency",
+      "file": "tools/kanban_tools.py",
+      "line": "1570",
+      "finding": "Die neuen Worker-Freitextfelder kanban_approval_request(note), kanban_watchdog_create(instructions) und kanban_watchdog_decide(note) werden unredigiert persistiert, waehrend derselbe Branch phase/unit der Heartbeats explizit mit 'same redactor as kanban_comment' (_redact, tools/kanban_tools.py:983) schuetzt.",
+      "evidence": "tools/kanban_tools.py _handle_approval_request/_handle_watchdog_create/_handle_watchdog_decide reichen note/instructions ungefiltert an die Kernel weiter; kanban_comment body, block reason, complete summary, request_changes reason sind redigiert (Basis-Status quo).",
+      "impact": "Praezedenz ist ambivalent: das gleichfalls Worker-beschreibbare kanban_heartbeat(note) war VOR dem Branch ebenfalls unredigiert; kein aktiver Leak (gitleaks-Delta 0 echt). Potenzieller Versehentlich-Persistenz-Kanal fuer Secrets in approvals-/watchdog-Tabellen und Events.",
+      "required_action": "Folge-Commit: drei Felder im Tool-Layer durch _redact() fuehren (chirurgisch, kein Verhalten fuer unschuldigen Text)."
+    },
+    {
+      "id": "F-03",
+      "severity": "low",
+      "disposition": "non-blocking, test-only",
+      "area": "test portability",
+      "file": "tests/hermes_cli/test_kanban_progress_heartbeat.py",
+      "line": 240,
+      "finding": "Der Legacy-Synthese-Helper _drop_progress_columns schlaegt auf SQLite 3.45.1 mit 'error in table task_runs after drop column: incomplete input' fehl (DROP COLUMN des letzten Columns scheitert am Re-Parse wegen der Inline-Kommentar-Bloecke in SCHEMA_SQL/task_runs).",
+      "evidence": "Reproduziert auf VM125: erste 8 DROPs ok, progress_updated_at FAIL (sqlite 3.45.1); beide betroffenen Tests gruen auf der PM-Ziel-Runtime laut Parent-Vollsuite (0 neue Fehler); Produktion nutzt DROP COLUMN nie (grep: nur Tests, inkl. etablierter Muster an sessions/tasks).",
+      "impact": "Nur Testumgebungen mit aelterem SQLite; kein Produktions- oder Cutover-Risiko.",
+      "required_action": "Optional: Legacy-DB im Test per Schema-Rebuild (ohne die Spalten) statt DROP COLUMN synthetisieren."
+    },
+    {
+      "id": "F-04",
+      "severity": "low",
+      "disposition": "non-blocking, dokumentiert",
+      "area": "idempotency race window",
+      "file": "hermes_cli/kanban_db.py",
+      "line": 1578,
+      "finding": "create_task prueft idempotency_key VOR dem write_txn (dokumentiert: 'a concurrent-create race may insert twice, the next lookup stabilises on the newest'); idempotency_key ist nicht UNIQUE (nur Index).",
+      "evidence": "kanban_db.py:1578-1587; Workflow-Apply schliesst die Race via in-txn Re-Check unter BEGIN IMMEDIATE; Routine-Dedupe reitet auf dem cron-Occurrence-Ledger (at-most-once pro Instant) und Read-Back.",
+      "impact": "Restrisiko: gleichzeitiger Multi-Prozess-Fire desselben Occurrence-Keys (z.B. Tick + manuelles run zur selben Sekunde) koennte doppelt anlegen; praktisch durch Cron-Claim-Fence und manuelle Schluessel getrennt.",
+      "required_action": "Keine fuer P0; optional spaeter UNIQUE-Praefix-Guard oder in-txn Re-Check auch fuer Routine-Materialisierung."
+    },
+    {
+      "id": "F-05",
+      "severity": "info",
+      "disposition": "non-blocking, dokumentierter Tradeoff",
+      "area": "project goal/budget coupling",
+      "file": "hermes_cli/kanban_projects.py",
+      "line": 318,
+      "finding": "set_project_goal commitet die Goal-Row zuerst und koppelt erst danach den kanban_budgets-Row; ein Crash zwischen beiden laesst die Kopplung bis zum naechsten Aufruf offen.",
+      "evidence": "kanban_projects.py:318-331 mit Begruendung (beide Seiten idempotente Upserts, 'self-heals on the next call', Goal-Row nie halb-geschrieben).",
+      "impact": "Konsistenz-Fenster, kein Datenverlust; Human-Vertrag (Goal-Row) hat Vorrang.",
+      "required_action": "Keine."
+    }
+  ],
+  "test_receipts_checked": [
+    "artifacts/approval-engine-test-receipt.json",
+    "artifacts/blocked-inbox-test-receipt.json",
+    "artifacts/cost-budget-test-receipt.json",
+    "artifacts/governance-dashboard-test-receipt.json",
+    "artifacts/progress-heartbeat-test-receipt.json",
+    "artifacts/project-rollup-test-receipt.json",
+    "artifacts/routine-test-receipt.json",
+    "artifacts/watchdog-test-receipt.json",
+    "artifacts/workflow-template-test-receipt.json",
+    "artifacts/baseline-relative/receipt.json"
+  ],
+  "review_method": "Vollstaendige Lektuere der 7 neuen Kernel-Module (kanban_cost/approvals/inbox/projects/watchdog/workflows, cron/kanban_routine); Diff-Review von kanban_db.py, kanban_db_connect.py, kanban_db_dispatch.py, tools/kanban_tools.py + _schemas, hermes_state_usage.py, tool_guardrails.py, prompt_builder.py, cli_shutdown.py, config_defaults.py, cron/{jobs,scheduler,job_definition}.py, hermes_cli/cron.py; Schema- und SQL-Parameterisierungs-Audit; gezielte unabhaengige Testlaeufe auf VM125 mit vorhandener Runtime.",
+  "cutover_conditions": [
+    "source->delivery darf ausschliesslich den einen Review-Artefaktcommit enthalten; delivery_head, source_head und SHA256 beider Reviewdateien kommen aus der kanban_complete-Metadaten dieses Runs.",
+    "Erwartete Live-Basis bleibt exakt bffb12a6cec643bc0b80bdffc33b8cbb95f67489 (korrekter Voll-SHA; NICHT der Receipt-String aus F-01).",
+    "F-02-Folgehaertung kann vor oder nach Cutover als eigener chirurgischer Commit erfolgen; blockiert Cutover nicht."
+  ]
+}
