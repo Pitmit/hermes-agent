@@ -29,6 +29,7 @@ from hermes_cli.update_channel import (  # noqa: E402
 from scripts.releases.authors import resolve_author  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+GITHUB_RELEASE_BODY_MAX_CHARS = 125_000
 
 
 def git(*args, cwd=None):
@@ -416,6 +417,40 @@ def generate_changelog(commits, tag_name, semver, repo_url="https://github.com/N
     return "\n".join(lines)
 
 
+def generate_bounded_canary_changelog(commits, tag_name, semver, *, prev_tag, no_changelog):
+    """Build canary notes that GitHub will accept before any tag is pushed.
+
+    A repository without a published stable/canary baseline can expose the
+    entire history. Keep that first cut useful, but collapse it to the normal
+    release frame plus changelog link when the detailed notes exceed GitHub's
+    documented body limit.
+    """
+    notes = generate_changelog(
+        commits, tag_name, semver, prev_tag=prev_tag,
+        first_release=False, no_changelog=no_changelog,
+    )
+    if len(notes) <= GITHUB_RELEASE_BODY_MAX_CHARS:
+        return notes
+    if no_changelog:
+        raise ValueError(
+            "Canary release notes exceed GitHub's 125000-character limit "
+            "even with --no-changelog"
+        )
+    compact = generate_changelog(
+        commits, tag_name, semver, prev_tag=prev_tag,
+        first_release=False, no_changelog=True,
+    )
+    if len(compact) > GITHUB_RELEASE_BODY_MAX_CHARS:
+        raise ValueError(
+            "Compacted canary release notes exceed GitHub's 125000-character limit"
+        )
+    print(
+        f"Canary notes were {len(notes)} characters; using compact notes "
+        f"({len(compact)} characters) before publishing the tag."
+    )
+    return compact
+
+
 def _resume_canary(tag: str, remote: str, repository: str, *, notes_file: Path | None = None) -> None:
     """Converge a tag-pushed canary through draft, dispatch, and protected head."""
     ref = f"refs/tags/{tag}"
@@ -525,8 +560,8 @@ def cmd_canary(args) -> None:
 
     version = tag_name.lstrip("v")
     print(f"Canary: {tag_name} ({len(commits)} commits since {since})")
-    changelog = generate_changelog(
-        commits, tag_name, version, prev_tag=since, first_release=False, no_changelog=args.no_changelog
+    changelog = generate_bounded_canary_changelog(
+        commits, tag_name, version, prev_tag=since, no_changelog=args.no_changelog
     )
 
     if not args.publish:
