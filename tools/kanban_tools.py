@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from typing import Any, Callable, Optional
 
 from agent.redact import redact_sensitive_text
-from hermes_cli.goals import judge_goal
+from hermes_cli.goals import judge_goal_lifecycle, render_lifecycle_evidence, render_lifecycle_task
 from tools.registry import no_cache_check_fn, registry, tool_error
 from hermes_cli.config import cfg_get, load_config
 from tools.kanban_tools_schemas import (
@@ -529,34 +529,68 @@ _GOAL_GATE_MESSAGES = {
             "Goal review handoff rejected by judge: {reason}. Provide acceptance evidence "
             "matching the card before requesting review.")}}
 
+# Unusable lifecycle-judge output (empty / length-truncated / non-JSON / prompt overflow):
+# infrastructure UNKNOWN — refuse with NO board effect; point at the judge route, not at
+# missing evidence. Bounded guidance so a persistently broken judge routes to a human
+# (kanban_block kind='needs_input') instead of an identical-retry loop.
+_GOAL_GATE_UNKNOWN_MESSAGE = (
+    "{tool} could not be judged: the lifecycle judge produced no usable verdict "
+    "(infrastructure UNKNOWN — {reason}). Nothing changed on the board and this is NOT an "
+    "acceptance failure. Retry the same call once or twice; if it keeps failing, the "
+    "auxiliary.goal_judge route/model is broken — record it with kanban_block "
+    "(kind='needs_input') naming the judge route so an operator can fix it. Do not "
+    "fabricate evidence and do not treat this as a task-level rejection."
+)
 
-def _goal_gate(tool_name: str, task, tid: str, evidence: str) -> None:
-    """Goal-mode pre-handoff judge gate: a worker must not complete / request
-    review before acceptance criteria are met. ``blocked`` gets its own
-    guidance; any other non-``done`` verdict gets the ``continue`` guidance.
-    A broken judge fails open (logged) so it cannot permanently wedge work."""
+
+def _goal_gate(tool_name: str, task, tid: str, evidence: str, *, conn=None) -> None:
+    """Goal-mode pre-handoff judge gate at a lifecycle boundary (complete / request_review).
+
+    The judge sees the FULL card and the FULL handoff evidence (summary + metadata +
+    artifacts — see ``hermes_cli.goals.judge_goal_lifecycle``): the previous 2000-char
+    goal prefix hid the phase contract of large cards and manufactured handoff deadlocks.
+    The boundary is phase-appropriate: ``kanban_request_review`` is judged for build- and
+    self-test readiness for the NEXT independent review — never for the reviewer's PASS,
+    a downstream E2E run, or a re-confirmation of this very call; ``kanban_complete`` is
+    judged against the card's own completion criteria — never blanket-allowed because a
+    review exists. ``blocked`` keeps its own guidance; any other non-``done`` verdict gets
+    the ``continue`` guidance. The judge also receives the task's authoritative native
+    board status (``task_status``), so a multi-role card is judged in the phase the board
+    records, never a phase claimed in the evidence text.
+
+    Unusable judge output (empty / length-truncated / non-JSON / prompt overflow) is
+    infrastructure UNKNOWN — the handoff is rejected with NO board effect and a message
+    that points at the judge route instead of demanding new evidence; never silently
+    allowed. An unreachable judge still fails open (logged) so it cannot permanently wedge
+    work (#83610).
+    """
     if not task or not task.goal_mode or not _goal_judge_available():
         return
+    mode = "request_review" if tool_name == "kanban_request_review" else "complete"
     try:
         # Headless gate runs outside any agent turn: bind the per-task relay-affinity scope
         # (mirrors kanban_specify) so the relay does not reject the judge call (#113669).
         from agent.portal_tags import get_affinity_scope, reset_affinity_scope, set_affinity_scope
         affinity_token = None if get_affinity_scope() else set_affinity_scope(f"kanban:{tid}")
         try:
-            verdict, reason, _, _, transport_failed = judge_goal(
-                goal=f"{task.title}\n\n{task.body or ''}".strip(), last_response=evidence.strip())
+            verdict, reason, _, _, transport_failed = judge_goal_lifecycle(
+                task_text=render_lifecycle_task(task, conn),
+                evidence=evidence.strip(), mode=mode,
+                task_status=getattr(task, "status", None))
         finally:
             if affinity_token is not None:
                 reset_affinity_scope(affinity_token)
     except Exception as judge_exc:
-        logger.warning(
-            "goal judge check failed, allowing lifecycle handoff: %s", judge_exc, exc_info=True)
-        return
+        logger.warning("lifecycle judge internal failure: %s", type(judge_exc).__name__)
+        raise _Reject(_GOAL_GATE_UNKNOWN_MESSAGE.format(
+            tool=tool_name, reason=f"internal lifecycle error: {type(judge_exc).__name__}")) from judge_exc
     if transport_failed:
-        # ``judge_goal`` fails open to ``continue`` on transport errors (relay 400, auth, timeout);
+        # The lifecycle judge fails open on transport errors (relay 400, auth, timeout);
         # an unreachable judge is not a human "not done" and must not reject the handoff (#83610).
         logger.warning("goal judge unreachable (%s), allowing lifecycle handoff", reason)
         return
+    if verdict == "unknown":
+        raise _Reject(_GOAL_GATE_UNKNOWN_MESSAGE.format(tool=tool_name, reason=reason))
     if verdict == "done":
         return
     key = "blocked" if verdict == "blocked" else "continue"
@@ -824,7 +858,10 @@ def _handle_complete(args: dict, **kw) -> str:
         # judge by calling kanban_complete before acceptance criteria are met. Only enforce when a judge is
         # actually reachable — see _goal_judge_available for why an unavailable judge fails open.
         task = kb.get_task(conn, tid)
-        _goal_gate("kanban_complete", task, tid, summary.strip())
+        # Full evidence for the lifecycle judge: the summary plus the metadata (incl. the
+        # merged artifact paths) this call would persist — never a summary-only view.
+        _goal_gate("kanban_complete", task, tid,
+                   render_lifecycle_evidence(summary.strip(), metadata), conn=conn)
         try:
             ok = kb.complete_task(
                 conn, tid, result=result, summary=summary, metadata=metadata,
@@ -978,7 +1015,8 @@ def _handle_request_review(args: dict, **kw) -> str:
                f"reviewer profile {reviewer!r} is not installed. "
                f"Installed profiles: {', '.join(list_profile_names())}")
     with _board(args.get("board")) as (kb, conn):
-        _goal_gate("kanban_request_review", kb.get_task(conn, tid), tid, summary)
+        _goal_gate("kanban_request_review", kb.get_task(conn, tid), tid,
+                   render_lifecycle_evidence(summary, metadata), conn=conn)
         try:
             ok, fail_reason = kb.request_review(
                 conn, tid, summary=summary, metadata=metadata, reviewer=reviewer,

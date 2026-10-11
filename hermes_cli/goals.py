@@ -37,6 +37,24 @@ DEFAULT_JUDGE_TIMEOUT = 30.0
 DEFAULT_JUDGE_MAX_TOKENS = 4096
 # Cap how much of the last response we send to the judge.
 _JUDGE_RESPONSE_SNIPPET_CHARS = 4000
+# Lifecycle-boundary judge (the kanban_complete / kanban_request_review handoff gates). The
+# regular /goal judge below clips goal 2000 / response 4000 chars; a kanban handoff gate must
+# judge the FULL card (immutable target facts, acceptance criteria, end criteria) and the
+# FULL handoff evidence (summary + metadata incl. artifacts) — a 20620-char card with its
+# phase contract at index 9656 once reached the judge as a 2000-char prefix, and the judge
+# demanded as preconditions criteria it could not see (the 2026-10-11 handoff deadlock).
+# Separate, generous bounds; an over-limit prompt is refused explicitly (verdict "unknown")
+# instead of prefix-truncated, and card content is never moved or removed to fit.
+LIFECYCLE_JUDGE_MODES = ("complete", "request_review")
+DEFAULT_LIFECYCLE_JUDGE_MAX_PROMPT_CHARS = 200_000
+# CALL-ONLY, task-scoped reasoning for lifecycle judge calls (public call_llm
+# ``reasoning_config`` — the proven path for z-ai/glm-5.3 via openrouter: at default
+# reasoning the model burned the whole 4096-token completion budget on hidden reasoning and
+# returned empty content with finish_reason=length; the identical call at low effort returned
+# a clean one-line JSON verdict with finish_reason=stop). The regular /goal judge keeps
+# passing NO reasoning_config; an explicit ``auxiliary.goal_judge.reasoning_effort`` beats
+# this default (see _lifecycle_reasoning_config).
+DEFAULT_LIFECYCLE_JUDGE_REASONING: Dict[str, Any] = {"enabled": True, "effort": "low"}
 # Consecutive judge *parse* failures (empty / non-JSON) before the loop auto-pauses and points at
 # the goal_judge config. API/transport errors do NOT count — those are tracked separately below.
 # Guards against small models that cannot follow the strict JSON contract burning the whole budget.
@@ -233,6 +251,79 @@ JUDGE_USER_PROMPT_WITH_CONTRACT_TEMPLATE = (
     "return BLOCKED with the reason describing the block.\n"
     "- Otherwise the goal is NOT done — CONTINUE.\n\n"
     "Is the goal satisfied per its completion contract — done, blocked, continue, or wait?"
+)
+
+# Lifecycle-boundary judge (kanban_complete / kanban_request_review handoff gates): the judge
+# evaluates a worker's terminal lifecycle call at its phase boundary, against the FULL card.
+LIFECYCLE_JUDGE_SYSTEM_PROMPT = (
+    "You are a strict judge at a kanban lifecycle boundary. You receive the FULL kanban "
+    "task text (title and body, verbatim — including immutable target-environment "
+    "constraints, acceptance criteria and end criteria) and the worker's FULL handoff "
+    "evidence (summary, metadata, artifacts). Decide whether the worker's lifecycle call "
+    "may proceed.\n\n"
+    "{phase_instruction}\n\n"
+    "Reply ONLY with a single JSON object on one line. Shapes:\n"
+    '{{"verdict": "done", "reason": "<one sentence>"}}\n'
+    '{{"verdict": "continue", "reason": "<one sentence>"}}\n'
+    '{{"verdict": "blocked", "reason": "<one sentence>"}}\n'
+    "done requires concrete evidence in the handoff (command output, test results, "
+    "artifact paths, receipts) — a bare claim like 'all done' is not evidence. Which "
+    "outcomes may legitimately be demanded at this boundary is defined by the phase "
+    "instruction below — never judge a card by evidence claims alone."
+)
+
+LIFECYCLE_JUDGE_COMPLETE_PHASE_INSTRUCTION = (
+    "Phase boundary: the worker is calling kanban_complete, which terminates the task as "
+    "done. Evaluate only whether every criterion that applies to THIS card at completion "
+    "time — in the card's and the worker's actual role phase — is satisfied by the "
+    "evidence: implementation finished, self-verification run with real results, required "
+    "artifacts produced. Do NOT blanket-allow because a review was requested or exists "
+    "elsewhere. Criteria the card makes due at THIS boundary — including an independent "
+    "review's PASS, a required human approval, or a downstream E2E run the card demands "
+    "before completion — are genuine completion criteria: if the handoff lacks evidence "
+    "for them (real build obligations, failed tests, absent review or human receipts), the "
+    "verdict is continue. Only outcomes the card explicitly defers to a stage AFTER "
+    "completion (e.g. live activation reserved for a separate owner-blocked release) are "
+    "not demanded here — and a reason that demands, as a precondition of this call, a "
+    "confirmation of this very handoff is wrong. If the work is genuinely "
+    "unachievable, blocked."
+)
+
+LIFECYCLE_JUDGE_REQUEST_REVIEW_PHASE_INSTRUCTION = (
+    "Phase boundary: the worker is calling kanban_request_review, which hands the "
+    "finished implementation to the NEXT independent review. This call is the INPUT to "
+    "that review, never its outcome. Evaluate only build- and self-test readiness: the "
+    "implementation is complete, self-tests ran with real results, and the handoff "
+    "carries the evidence the reviewer needs. Do NOT demand as a precondition the things "
+    "that follow this call: the independent reviewer's PASS, a downstream end-to-end run "
+    "reserved for a later stage, live activation, or a re-confirmation that this very "
+    "handoff was made. Missing genuine build duties, failed tests, or absent evidence → "
+    "continue. Genuinely unachievable → blocked. Implementation finished with honest "
+    "self-verification → done."
+)
+
+LIFECYCLE_JUDGE_USER_PROMPT_TEMPLATE = (
+    "Kanban task (FULL text, verbatim — every constraint and criterion applies):\n"
+    "{task_text}\n\n"
+    "Authoritative native board phase at call time: {task_status}\n\n"
+    "Worker's handoff evidence (summary + metadata incl. artifacts):\n{evidence}\n\n"
+    "Current time: {current_time}\n\n"
+    "Decision rules:\n"
+    "- For each criterion the task states for THIS boundary, find concrete evidence in "
+    "the handoff. Generic phrases like 'all requirements met' are not evidence.\n"
+    "- The appended Runtime-bound native lifecycle context is authoritative. Both "
+    "producer and reviewer have board_status=running: use its execution_phase, "
+    "run_profile, actor_profile and claim_source_status, never role claims in evidence. "
+    "An unclaimed operator is NOT evidence that a required review happened.\n"
+    "- Apply the selected phase instruction. At request_review only, the future "
+    "independent review result is not a precondition of the input to that review. "
+    "At complete, every currently due review, human and E2E obligation MUST have "
+    "its actual receipt: merely requesting a handoff does not satisfy it. A later "
+    "stage may be excluded only if the card explicitly places it AFTER completion "
+    "of the CURRENT native role, not merely after an earlier implementer phase.\n"
+    "- If required evidence is absent or a test failed, continue; if the work is truly "
+    "impossible as stated, blocked.\n\n"
+    "Is the worker's handoff ready for this lifecycle boundary — done, continue, or blocked?"
 )
 
 # /goal draft: turn a plain objective into a reviewable contract (after Codex's "draft the goal").
@@ -771,6 +862,46 @@ def _goal_judge_timeout() -> float:
     return _goal_judge_setting("timeout", DEFAULT_JUDGE_TIMEOUT, float)
 
 
+def _lifecycle_max_prompt_chars() -> int:
+    """``auxiliary.goal_judge.lifecycle_max_prompt_chars`` if positive, else the fixed
+    default ceiling. Any config error keeps the default — never silently unbounded."""
+    try:
+        from hermes_cli.config import load_config
+
+        value = int((load_config().get("auxiliary") or {}).get("goal_judge", {})
+                    .get("lifecycle_max_prompt_chars", 0))
+        if value > 0:
+            return value
+    except Exception:
+        pass
+    return DEFAULT_LIFECYCLE_JUDGE_MAX_PROMPT_CHARS
+
+
+def _lifecycle_reasoning_config() -> Optional[Dict[str, Any]]:
+    """Reasoning for lifecycle-boundary judge calls ONLY.
+
+    Priority: an explicit ``auxiliary.goal_judge.reasoning_effort`` (respected verbatim,
+    including ``none``/``false`` → disabled) beats the lifecycle default
+    ``{"enabled": True, "effort": "low"}``. The default never applies to the regular /goal
+    judge (which keeps passing no ``reasoning_config``) or to any other auxiliary task.
+    """
+    try:
+        from hermes_cli.config import load_config
+
+        effort = (load_config().get("auxiliary") or {}).get("goal_judge", {}).get("reasoning_effort")
+        if effort is not None and effort != "":
+            from hermes_constants import parse_reasoning_effort
+
+            parsed = parse_reasoning_effort(effort)
+            if parsed is not None:
+                return parsed
+            logger.warning("auxiliary.goal_judge.reasoning_effort %r is not a valid level; "
+                           "using the lifecycle default", effort)
+    except Exception:
+        pass
+    return dict(DEFAULT_LIFECYCLE_JUDGE_REASONING)
+
+
 def _extract_json_object(raw: str) -> Optional[Dict[str, Any]]:
     """Best-effort: strip code fences, parse the blob, else pull the first ``{...}`` out."""
     if not raw:
@@ -874,20 +1005,92 @@ def _render_background_block(background_processes: Optional[List[Dict[str, Any]]
     return JUDGE_BACKGROUND_BLOCK_TEMPLATE.format(background_lines="\n".join(lines))
 
 
-def _call_goal_judge_llm(call_llm, system_prompt: str, user_prompt: str, timeout: Optional[float]) -> str:
+def _call_goal_judge_llm(call_llm, system_prompt: str, user_prompt: str, timeout: Optional[float],
+                         *, reasoning_config: Optional[Dict[str, Any]] = None,
+                         return_finish_reason: bool = False):
     """Route through call_llm so auxiliary.goal_judge.* config (provider/model, extra_body,
-    reasoning_effort, retries) all apply. Returns the raw reply text."""
+    reasoning_effort, retries) all apply. Returns the raw reply text, or — with
+    ``return_finish_reason=True`` (the lifecycle-boundary judge only) — the
+    ``(content, finish_reason)`` pair so callers can refuse budget-aborted output.
+
+    ``reasoning_config`` is the CALL-ONLY, task-scoped public ``call_llm`` override
+    (#35566 path): used by the lifecycle-boundary judge (``judge_goal_lifecycle``); the
+    regular /goal judge passes ``None`` and keeps its wire behavior unchanged."""
     # See #35566.
     # Route through call_llm — same #35566 fix as the judge call above.
     resp = call_llm(
         task="goal_judge",
         messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
         temperature=0, max_tokens=_goal_judge_max_tokens(), timeout=timeout,
+        reasoning_config=reasoning_config,
     )
     try:
-        return resp.choices[0].message.content or ""
+        choice = resp.choices[0]
+        content = choice.message.content or ""
+        finish_reason = getattr(choice, "finish_reason", None)
     except Exception:
-        return ""
+        content, finish_reason = "", None
+    if return_finish_reason:
+        # Preserve the observed types. A malformed finish field must not become
+        # indistinguishable from an absent field at a lifecycle boundary.
+        return content, finish_reason
+    return content
+
+
+# Finish reasons that mean the reply is complete and trustworthy for gating. Anything
+# else (``length`` budget abort, ``content_filter``, …) may have clipped or altered the
+# verdict — the lifecycle path refuses such output as infrastructure UNKNOWN.
+_LIFECYCLE_USABLE_FINISH_REASONS = {"", "stop"}
+
+_LIFECYCLE_JUDGE_VERDICTS = {"done", "continue", "blocked", "wait"}
+
+
+def _parse_lifecycle_judge_response(raw: str) -> Tuple[str, str, bool]:
+    """STRICT parser for lifecycle-boundary judge replies (``judge_goal_lifecycle`` only).
+
+    Unlike the permissive regular-/goal parser (``_parse_judge_response``, fail-open and
+    legacy-tolerant), a lifecycle gate can flip real board state (running → done/review):
+    it accepts ONLY the documented shape ``{"verdict": "done|continue|blocked|wait",
+    "reason": "<str>"}``. Everything else — empty output, non-JSON, a non-object JSON
+    top level, a missing / non-string / unknown ``verdict``, or a legacy truthy
+    ``"done"`` value (object / array / number / bool) — is infrastructure UNKNOWN
+    (``parse_failed=True``): a malformed reply must never become a board transition,
+    and never a genuine acceptance failure. A ``wait`` has nothing to park at a
+    lifecycle boundary and downgrades to ``continue``."""
+    if not isinstance(raw, str) or not raw.strip():
+        return "unknown", "judge content must be a non-empty string", True
+
+    def unique_object(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError("duplicate JSON member")
+            value[key] = item
+        return value
+
+    def invalid_constant(_value):
+        raise ValueError("non-JSON numeric constant")
+
+    try:
+        # Consume the WHOLE message: no regex salvage, code-fence stripping,
+        # trailing object, duplicate member, NaN or Infinity can yield a GO.
+        data = json.loads(raw, object_pairs_hook=unique_object,
+                          parse_constant=invalid_constant)
+    except (ValueError, TypeError):
+        return "unknown", "judge content is not one complete strict JSON object", True
+    if not isinstance(data, dict):
+        return "unknown", "judge reply must be a JSON object", True
+    verdict = data.get("verdict")
+    reason = data.get("reason")
+    if not isinstance(verdict, str) or verdict not in _LIFECYCLE_JUDGE_VERDICTS:
+        return "unknown", "judge verdict is missing, mistyped or outside its enum", True
+    if not isinstance(reason, str) or not reason.strip():
+        return "unknown", "judge reason must be a non-empty string", True
+    reason = reason.strip()
+    if verdict == "wait":
+        return "continue", f"{reason} (wait verdict downgraded at the lifecycle boundary)", False
+    return verdict, reason, False
+
 
 
 def judge_goal(
@@ -956,6 +1159,175 @@ def judge_goal(
     logger.info("goal judge: verdict=%s reason=%s%s", verdict, _truncate(reason, 120),
                 f" wait={wait_directive}" if wait_directive else "")
     return verdict, reason, parse_failed, wait_directive, False
+
+
+def render_lifecycle_task(task, conn=None) -> str:
+    """Full original card plus READ-ONLY authoritative native claim provenance.
+
+    Both producer and reviewer claims set status=running. Bind the current run,
+    actual profile and its claimed event; never infer role from handoff prose.
+    Non-persisted helper fixtures have no writer target and retain plain text.
+    """
+    text = f"{task.title}\n\n{task.body or ''}".strip()
+    from hermes_cli import kanban_db as kb, kanban_db_connect as kbc
+    from hermes_cli.profiles import current_profile_name
+
+    if not isinstance(task, kb.Task):
+        # Non-persisted helper fixtures have no native writer target.
+        return text
+    from contextlib import nullcontext
+    with (kbc.connect_closing() if conn is None else nullcontext(conn)) as conn:
+        persisted = kb.get_task(conn, task.id)
+        if persisted is None:
+            return text
+        actor = current_profile_name("user") or "user"
+        context = {"task_id": persisted.id, "board_status": persisted.status,
+                   "actor_profile": actor, "assignee": persisted.assignee,
+                   "current_run_id": persisted.current_run_id}
+        if persisted.current_run_id is None:
+            context["execution_phase"] = "unclaimed_operator"
+        else:
+            run = kb.get_run(conn, persisted.current_run_id)
+            event = conn.execute(
+                "SELECT payload FROM task_events WHERE task_id=? AND run_id=? "
+                "AND kind='claimed' ORDER BY id DESC LIMIT 1",
+                (persisted.id, persisted.current_run_id)).fetchone()
+            if (run is None or event is None or run.status != "running"
+                    or run.task_id != persisted.id):
+                raise ValueError("native lifecycle run/claim binding unavailable")
+            claim = json.loads(event[0])
+            if not isinstance(claim, dict) or claim.get("run_id") != run.id:
+                raise ValueError("native lifecycle claimed-event binding mismatch")
+            if run.profile != actor or persisted.assignee != actor:
+                raise ValueError("native lifecycle actor/current-run profile mismatch")
+            if run.claim_lock != persisted.claim_lock or claim.get("lock") != run.claim_lock:
+                raise ValueError("native lifecycle claim-lock mismatch")
+            # Canonical claim_task starts only from ready; claim_review_task
+            # explicitly persists source_status=review on that same run event.
+            source = claim.get("source_status", "ready")
+            if source not in {"ready", "review"}:
+                raise ValueError("native lifecycle claim-source status unsupported")
+            context.update(run_profile=run.profile, claim_source_status=source,
+                           execution_phase="independent_review" if source == "review"
+                           else "implementation")
+    return text + "\n\nRuntime-bound native lifecycle context (NOT handoff evidence):\n" + json.dumps(
+        context, sort_keys=True, ensure_ascii=False)
+
+
+def render_lifecycle_evidence(summary: str, metadata: Optional[Dict[str, Any]]) -> str:
+    """Full handoff evidence for a lifecycle-boundary judge: the (already redacted) summary
+    plus the metadata dict the call would persist — ``metadata["artifacts"]`` carries the
+    declared artifact paths, so the judge sees them with no schema change. Not truncated:
+    ``judge_goal_lifecycle`` applies its own fixed ceiling and refuses explicitly on
+    overflow."""
+    parts = [f"Summary: {(summary or '').strip()}"]
+    if metadata:
+        try:
+            parts.append("Metadata: " + json.dumps(metadata, ensure_ascii=False, sort_keys=True, default=str))
+        except (TypeError, ValueError):
+            parts.append("Metadata: <not serializable>")
+    return "\n\n".join(parts)
+
+
+def judge_goal_lifecycle(
+    task_text: str, evidence: str, *, mode: str = "complete", timeout: Optional[float] = None,
+    task_status: Optional[str] = None,
+) -> Tuple[str, str, bool, Optional[Dict[str, Any]], bool]:
+    """Lifecycle-boundary judge for kanban handoffs (complete / request_review).
+
+    Unlike the regular /goal judge (``judge_goal`` — 2000-char goal / 4000-char response
+    windows), this surface forwards the FULL task text and FULL handoff evidence to the
+    judge: a handoff must be judged against every criterion on the card, not a 2000-char
+    prefix (the 2026-10-11 deadlock: a 20620-char card reached the judge as a 2013-char
+    prefix, and it demanded as a precondition of a call criteria it could not see). A
+    fixed prompt ceiling refuses with verdict ``"unknown"`` on overflow — never a silent
+    prefix truncation, never moving or removing card content to fit.
+
+    ``mode`` selects the phase boundary (see the LIFECYCLE_* templates):
+    ``"complete"`` — the card's own completion criteria for its actual role phase, never
+    a blanket allow because a review was requested; ``"request_review"`` — build- and
+    self-test readiness for the NEXT independent review: never the reviewer's PASS, a
+    downstream E2E run reserved for a later stage, or re-confirmation of this very call
+    as a precondition of itself.
+
+    Returns the ``judge_goal`` 5-tuple contract; ``verdict`` may additionally be
+    ``"unknown"`` (prompt overflow / empty / non-JSON / malformed / budget-aborted
+    output) — infrastructure UNKNOWN, not an acceptance failure, never a silent allow.
+    ``task_status`` is the authoritative native board phase at call time (bound by the
+    gate callers, never derived from evidence claims). A reply that ends on a non-``stop``
+    finish reason (``length`` budget abort, content filter, …) is refused as UNKNOWN even
+    if its visible remainder parses as JSON. Transport failures fail open to
+    ``"continue"`` with ``transport_failed=True`` (an unreachable judge is not a human
+    "not done", #83610). Reasoning: explicit ``auxiliary.goal_judge.reasoning_effort``
+    respected verbatim, else the lifecycle-only low default (the regular /goal judge and
+    every other aux task are untouched).
+    """
+    if mode not in LIFECYCLE_JUDGE_MODES:
+        raise ValueError(f"unknown lifecycle mode: {mode!r}")
+    if not str(task_text or "").strip():
+        return "continue", "empty task text", False, None, False
+    if not str(evidence or "").strip():
+        return "continue", "empty handoff evidence (nothing to evaluate)", False, None, False
+    if timeout is None:
+        timeout = _goal_judge_timeout()
+
+    user_prompt = LIFECYCLE_JUDGE_USER_PROMPT_TEMPLATE.format(
+        task_text=str(task_text),
+        task_status=(str(task_status).strip() if str(task_status or "").strip() else "not supplied"),
+        evidence=str(evidence),
+        current_time=safe_strftime(datetime.now(tz=timezone.utc).astimezone(), "%Y-%m-%d %H:%M:%S %Z"),
+    )
+    ceiling = _lifecycle_max_prompt_chars()
+    if len(user_prompt) > ceiling:
+        return (
+            "unknown",
+            f"lifecycle judge prompt exceeds the fixed context ceiling ({len(user_prompt)} > "
+            f"{ceiling} chars): refusing to truncate the card or evidence silently — shorten "
+            f"the task body/evidence, or raise auxiliary.goal_judge.lifecycle_max_prompt_chars",
+            False, None, False,
+        )
+
+    try:
+        from agent.auxiliary_client import call_llm
+        from agent.auxiliary_unavailable import AuxiliaryClientUnavailable
+    except Exception as exc:
+        logger.debug("lifecycle judge: auxiliary client import failed: %s", exc)
+        return "continue", "auxiliary client unavailable", False, None, True
+
+    phase_instruction = (LIFECYCLE_JUDGE_REQUEST_REVIEW_PHASE_INSTRUCTION if mode == "request_review"
+                         else LIFECYCLE_JUDGE_COMPLETE_PHASE_INSTRUCTION)
+    try:
+        raw, finish_reason = _call_goal_judge_llm(
+            call_llm, LIFECYCLE_JUDGE_SYSTEM_PROMPT.format(phase_instruction=phase_instruction),
+            user_prompt, timeout, reasoning_config=_lifecycle_reasoning_config(),
+            return_finish_reason=True)
+    except AuxiliaryClientUnavailable as exc:
+        logger.info("lifecycle judge: auxiliary client unavailable (%s) — allowing handoff", exc)
+        return "continue", f"goal_judge auxiliary client unavailable: {exc}", False, None, True
+    except Exception as exc:
+        logger.info("lifecycle judge: API call failed (%s) — allowing handoff", exc)
+        return "continue", f"judge error: {type(exc).__name__}", False, None, True
+
+    # F2: a reply that ended on a non-stop finish reason may be budget-clipped mid-JSON —
+    # refuse it as infrastructure UNKNOWN even when the visible remainder parses.
+    if (finish_reason is not None and not isinstance(finish_reason, str)) or (
+        isinstance(finish_reason, str)
+        and finish_reason.strip().lower() not in _LIFECYCLE_USABLE_FINISH_REASONS
+    ):
+        return (
+            "unknown",
+            f"judge response ended with finish_reason={finish_reason!r} (budget abort/filter) "
+            f"— the reply may be truncated, refusing to judge on it",
+            True, None, False,
+        )
+
+    verdict, reason, parse_failed = _parse_lifecycle_judge_response(raw)
+    if parse_failed:
+        # Empty / malformed / non-JSON judge output is infrastructure UNKNOWN, not
+        # a genuine acceptance failure: callers reject the handoff with no board effect and
+        # point at the judge route — and never silently allow it.
+        return "unknown", f"judge produced unusable output: {_truncate(reason, 300)}", True, None, False
+    return verdict, reason, False, None, False
 
 
 def count_active_delegations(session_id: Optional[str]) -> int:
@@ -1742,5 +2114,5 @@ __all__ = [
     "JUDGE_USER_PROMPT_WITH_SUBGOALS_TEMPLATE", "JUDGE_USER_PROMPT_WITH_CONTRACT_TEMPLATE",
     "DRAFT_CONTRACT_SYSTEM_PROMPT", "KANBAN_GOAL_CONTINUATION_TEMPLATE", "KANBAN_GOAL_FINALIZE_TEMPLATE",
     "DEFAULT_MAX_TURNS", "load_goal", "save_goal", "clear_goal", "migrate_goal_to_session", "judge_goal",
-    "run_kanban_goal_loop",
+    "judge_goal_lifecycle", "render_lifecycle_evidence", "LIFECYCLE_JUDGE_MODES", "run_kanban_goal_loop",
 ]

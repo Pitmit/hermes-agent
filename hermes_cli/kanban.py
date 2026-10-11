@@ -901,17 +901,23 @@ def _worker_run_id_for(task_id: str) -> Optional[int]:
         return None
 
 
-def _goal_mode_handoff_rejection(task: Optional[kb.Task], evidence: str):
-    """Goal judge for every terminal worker handoff (including review).
+def _goal_mode_handoff_rejection(task: Optional[kb.Task], evidence: str, *, mode: str = "complete", conn=None):
+    """Lifecycle judge for every terminal worker handoff (including review).
 
-    Returns ``(verdict, reason_or_None)``: ``"done"`` allows; ``"blocked"`` = judge ruled the goal
-    unachievable; ``"continue"``/``"wait"`` reject with the judge's reason. Judge failures allow
+    Returns ``(verdict, reason_or_None)``: ``"done"`` allows; ``"blocked"`` = judge ruled the
+    goal unachievable; ``"continue"`` rejects as not-done-yet; ``"unknown"`` = the judge
+    produced no usable verdict (infrastructure UNKNOWN — the caller rejects with NO board
+    effect instead of treating it as a human "not done"). Judge transport failures allow
     the handoff (logged).
 
-    See #100954.
-    ``{"done", None}`` means the judge allows the handoff; anything else is a rejection whose verdict
-    disambiguates the guidance the caller gives the worker (``continue`` = not done yet, ``blocked`` =
-    judged unachievable — see #100954).
+    The judge sees the FULL card and FULL evidence via ``hermes_cli.goals.judge_goal_lifecycle``
+    (no 2000-char prefix), and the boundary is phase-appropriate (``mode``):
+    ``request_review`` judges build-/self-test readiness for the NEXT independent review —
+    never the reviewer's PASS or a re-confirmation of this very call; ``complete`` judges
+    the card's own completion criteria — never a blanket allow because a review exists.
+    The task's authoritative native board status is bound as ``task_status`` so the judge
+    sees the phase the board records, not one claimed in the evidence text.
+    See #100954, #83610, #113669.
     """
     if task is None or not task.goal_mode:
         return ("done", None)
@@ -924,7 +930,7 @@ def _goal_mode_handoff_rejection(task: Optional[kb.Task], evidence: str):
     if client is None or not model:
         return ("done", None)
 
-    from hermes_cli.goals import judge_goal
+    from hermes_cli.goals import judge_goal_lifecycle, render_lifecycle_task
 
     verdict, reason, transport_failed = "done", "", False
     try:
@@ -933,19 +939,21 @@ def _goal_mode_handoff_rejection(task: Optional[kb.Task], evidence: str):
         from agent.portal_tags import get_affinity_scope, reset_affinity_scope, set_affinity_scope
         affinity_token = None if get_affinity_scope() else set_affinity_scope(f"kanban:{task.id}")
         try:
-            verdict, reason, _, _, transport_failed = judge_goal(
-                goal=f"{task.title}\n\n{task.body or ''}".strip(),
-                last_response=evidence.strip())
+            verdict, reason, _, _, transport_failed = judge_goal_lifecycle(
+                task_text=render_lifecycle_task(task, conn),
+                evidence=evidence.strip(), mode=mode,
+                task_status=getattr(task, "status", None))
         finally:
             if affinity_token is not None:
                 reset_affinity_scope(affinity_token)
     except Exception as judge_exc:
         import logging as _logging
 
-        _logging.getLogger(__name__).warning("goal judge check failed, allowing lifecycle handoff: %s",
-                                             judge_exc, exc_info=True)
+        _logging.getLogger(__name__).warning(
+            "lifecycle judge internal failure: %s", type(judge_exc).__name__)
+        return ("unknown", f"internal lifecycle error: {type(judge_exc).__name__}")
     if transport_failed:
-        # ``judge_goal`` fails open to ``continue`` on transport errors (relay 400, auth, timeout);
+        # ``judge_goal_lifecycle`` fails open on transport errors (relay 400, auth, timeout);
         # an unreachable judge is not a human "not done" and must not reject the handoff (#83610).
         import logging as _logging
 
@@ -955,11 +963,18 @@ def _goal_mode_handoff_rejection(task: Optional[kb.Task], evidence: str):
 
 
 def _goal_gate_error(conn, tid: str, evidence: str, handoff: str, blocked_hint: str,
-                     continue_hint: str) -> Optional[str]:
+                     continue_hint: str, *, mode: str = "complete") -> Optional[str]:
     """Goal-mode judge gate shared by ``complete`` / ``request-review`` (mirrors tools/kanban_tools.py);
     applied to every terminal handoff so request-review can't bypass it. Returns the error line, or
-    None to allow."""
-    verdict, rejection = _goal_mode_handoff_rejection(kb.get_task(conn, tid), evidence)
+    None to allow. ``mode`` selects the phase boundary (see ``hermes_cli.goals.judge_goal_lifecycle``)."""
+    verdict, rejection = _goal_mode_handoff_rejection(
+        kb.get_task(conn, tid), evidence, mode=mode, conn=conn)
+    if verdict == "unknown":
+        # Unusable judge output: infrastructure UNKNOWN, not an acceptance failure — refuse
+        # with no board effect and point at the judge route instead of missing evidence.
+        return (f"kanban: goal {handoff} of {tid} not judged — lifecycle judge infrastructure "
+                f"UNKNOWN ({rejection}). Nothing changed; this is not an acceptance failure. "
+                f"Retry, or fix the auxiliary.goal_judge route/model.")
     if verdict == "blocked":
         return (f"kanban: goal {handoff} of {tid} rejected: judge ruled "
                 f"the goal unachievable — {rejection}. {blocked_hint}")
@@ -986,10 +1001,14 @@ def _cmd_complete(args: argparse.Namespace) -> int:
     fail_msg: dict[str, str] = {}
     with kbc.connect_closing() as conn:
         def op(tid):
+            from hermes_cli.goals import render_lifecycle_evidence
+
             gate_err = _goal_gate_error(
-                conn, tid, (summary or args.result or "").strip(), "completion",
+                conn, tid, render_lifecycle_evidence((summary or args.result or "").strip(), metadata),
+                "completion",
                 "Re-scope with kanban edit, or record the block with kanban block instead of completing.",
-                "Provide evidence matching the task's acceptance criteria.")
+                "Provide evidence matching the task's acceptance criteria.",
+                mode="complete")
             if gate_err:
                 fail_msg[tid] = gate_err
                 return False
@@ -1115,10 +1134,13 @@ def _cmd_request_review(args: argparse.Namespace) -> int:
     if rc:
         return rc
     with kbc.connect_closing() as conn:
+        from hermes_cli.goals import render_lifecycle_evidence
+
         gate_err = _goal_gate_error(
-            conn, tid, summary or "", "review handoff",
+            conn, tid, render_lifecycle_evidence(summary or "", metadata), "review handoff",
             "Record the block with kanban block instead of requesting review.",
-            "Provide acceptance evidence matching the task.")
+            "Provide acceptance evidence matching the task.",
+            mode="request_review")
         if gate_err:
             return _err(gate_err)
         ok, reason = kb.request_review(
