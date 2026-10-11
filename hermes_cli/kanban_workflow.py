@@ -131,7 +131,8 @@ DEFAULT_WORKFLOW = Workflow(
         "blocked": ("triage", "todo", "scheduled", "ready", "done"),
         # Known quirk kept for zero behavior change: review -> todo lands in ``ready``
         # (reopen_review_task ignores the requested target). Phase 1 fixes it.
-        "review": ("triage", "todo", "ready", "done"),
+        # review -> blocked: block_task accepts a review card (reviewer escalation).
+        "review": ("triage", "todo", "ready", "blocked", "done"),
         "done": ("triage", "todo", "ready"),
         ARCHIVED: ("triage", "todo", "ready"),  # restore from the archive filter
     }),
