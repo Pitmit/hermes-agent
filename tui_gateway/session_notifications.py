@@ -134,7 +134,7 @@ def _notification_event_dedup_key(evt: dict) -> tuple:
 
 # Mirror gateway/kanban_watchers.py TERMINAL_KINDS: claim silent kinds (archived/unblocked) too so the cursor advances
 # past them and they can't wedge a later completed/blocked event behind an unclaimed row.
-_KANBAN_NOTIFY_KINDS = ("completed", "blocked", "gave_up", "crashed", "timed_out", "status", "archived", "unblocked")
+_KANBAN_NOTIFY_KINDS = ("completed", "blocked", "gave_up", "crashed", "timed_out", "status", "archived", "unblocked", "block_loop_detected", "review_requested", "changes_requested")
 # kanban, /loop + /heartbeat and the bot mailbox share one idle-poll cadence; probing the lease registry on
 # every 0.5s queue timeout cost ~a core at 11 sessions (#108005).
 _KANBAN_POLL_SECONDS = _LOOP_POLL_SECONDS = _BOT_DELIVERY_POLL_SECONDS = 5.0
@@ -328,6 +328,12 @@ _KANBAN_EVENT_FORMATTERS = {
     "crashed": ("✖", lambda t, p, title: " worker crashed (pid gone); dispatcher will retry"),
     "timed_out": ("⏱", _kb_timed_out),
     "status": ("🔄", lambda t, p, title: f" → {p.get('status') or ''}"),
+    "review_requested": ("🔎", lambda t, p, title: " review requested — " + title
+                         + (f" → @{str(p.get('reviewer'))[:80]}" if p.get("reviewer") else "")),
+    "changes_requested": ("↩", lambda t, p, title: " changes requested"
+                          + (f": {str(p.get('reason'))[:160]}" if p.get("reason") else "")),
+    "block_loop_detected": ("⏸", lambda t, p, title: " block loop detected; routed to triage"
+                            + (f": {str(p.get('reason'))[:160]}" if p.get("reason") else "")),
 }
 
 
