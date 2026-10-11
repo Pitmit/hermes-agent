@@ -591,6 +591,7 @@ def test_board_isolation(kanban_home):
 
     # A second board is a separate DB with its own board slug: the approval
     # is invisible there and cannot be decided through it.
+    kb.create_board("b2")  # boards must exist before connect(board=...)
     other = kbc.connect(board="b2")
     try:
         assert ka.list_approvals(other, "b2") == []

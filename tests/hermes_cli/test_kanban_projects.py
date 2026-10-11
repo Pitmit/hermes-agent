@@ -512,6 +512,7 @@ def test_board_isolation_of_goal_rows(kanban_home):
         kp.set_project_goal(conn, board="default", project_id=pid, goal="on default")
         conn.close()
 
+        kb.create_board("second")  # boards must exist before connect(board=...)
         second = kbc.connect(board="second")
         try:
             kp.set_project_goal(second, board="second", project_id=pid, goal="on second")
