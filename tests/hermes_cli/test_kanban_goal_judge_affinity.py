@@ -38,25 +38,25 @@ def _aux_client():
 
 
 def _recording_judge(seen):
-    def fake_judge(**kwargs):
+    def fake_judge(task_text, evidence, *, mode="complete", timeout=None, task_status=None):
         seen.append(get_affinity_scope())
         return ("done", "ok", False, None, False)
     return fake_judge
 
 
 def test_cli_gate_transport_failure_fails_open_but_genuine_verdict_rejects():
-    with _aux_client(), patch("hermes_cli.goals.judge_goal", return_value=_TRANSPORT_FAILED):
+    with _aux_client(), patch("hermes_cli.goals.judge_goal_lifecycle", return_value=_TRANSPORT_FAILED):
         assert kanban_cli._goal_mode_handoff_rejection(_task(), "evidence") == ("done", None)
-    with _aux_client(), patch("hermes_cli.goals.judge_goal", return_value=_GENUINE_CONTINUE):
+    with _aux_client(), patch("hermes_cli.goals.judge_goal_lifecycle", return_value=_GENUINE_CONTINUE):
         assert kanban_cli._goal_mode_handoff_rejection(_task(), "evidence") == (
             "continue", "goal not met yet")
 
 
 def test_tool_gate_transport_failure_fails_open_but_genuine_verdict_rejects():
     with patch.object(kanban_tools, "_goal_judge_available", return_value=True):
-        with patch.object(kanban_tools, "judge_goal", return_value=_TRANSPORT_FAILED):
+        with patch.object(kanban_tools, "judge_goal_lifecycle", return_value=_TRANSPORT_FAILED):
             kanban_tools._goal_gate("kanban_complete", _task(), "task-1", "ev")  # no raise
-        with patch.object(kanban_tools, "judge_goal", return_value=_GENUINE_CONTINUE):
+        with patch.object(kanban_tools, "judge_goal_lifecycle", return_value=_GENUINE_CONTINUE):
             with pytest.raises(kanban_tools._Reject):
                 kanban_tools._goal_gate("kanban_complete", _task(), "task-1", "ev")
 
@@ -64,14 +64,14 @@ def test_tool_gate_transport_failure_fails_open_but_genuine_verdict_rejects():
 def test_cli_gate_binds_per_task_affinity_scope():
     """Headless judge call runs under kanban:<task_id>; a bound scope is kept."""
     seen = []
-    with _aux_client(), patch("hermes_cli.goals.judge_goal", side_effect=_recording_judge(seen)):
+    with _aux_client(), patch("hermes_cli.goals.judge_goal_lifecycle", side_effect=_recording_judge(seen)):
         assert kanban_cli._goal_mode_handoff_rejection(_task("task-9"), "ev") == ("done", None)
     assert seen == ["kanban:task-9"]
     assert get_affinity_scope() is None
 
     token = set_affinity_scope("outer-conversation")
     try:
-        with _aux_client(), patch("hermes_cli.goals.judge_goal", side_effect=_recording_judge(seen)):
+        with _aux_client(), patch("hermes_cli.goals.judge_goal_lifecycle", side_effect=_recording_judge(seen)):
             kanban_cli._goal_mode_handoff_rejection(_task("task-9"), "ev")
     finally:
         reset_affinity_scope(token)
@@ -81,7 +81,7 @@ def test_cli_gate_binds_per_task_affinity_scope():
 def test_tool_gate_binds_per_task_affinity_scope():
     seen = []
     with patch.object(kanban_tools, "_goal_judge_available", return_value=True), patch.object(
-            kanban_tools, "judge_goal", side_effect=_recording_judge(seen)):
+            kanban_tools, "judge_goal_lifecycle", side_effect=_recording_judge(seen)):
         kanban_tools._goal_gate("kanban_complete", _task("task-9"), "task-9", "ev")
     assert seen == ["kanban:task-9"]
     assert get_affinity_scope() is None

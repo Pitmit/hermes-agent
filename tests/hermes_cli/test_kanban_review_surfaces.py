@@ -291,17 +291,17 @@ def test_goal_mode_review_handoff_cannot_bypass_judge(
     from tools import kanban_tools as tools
 
     monkeypatch.setattr(tools, "_goal_judge_available", lambda: True)
-    monkeypatch.setattr(
-        tools,
-        "judge_goal",
-        lambda *args, **kwargs: (
+
+    def _fake_tool_lifecycle_judge(task_text, evidence, *, mode="complete", timeout=None, task_status=None):
+        return (
             "continue",
             "acceptance evidence is missing",
             False,
             None,
             False,
-        ),
-    )
+        )
+
+    monkeypatch.setattr(tools, "judge_goal_lifecycle", _fake_tool_lifecycle_judge)
     rejected = json.loads(tools._handle_request_review({"summary": "Looks ready."}))
     assert "error" in rejected
     assert "rejected by judge" in rejected["error"]
@@ -331,11 +331,10 @@ def test_goal_mode_review_handoff_cannot_bypass_judge(
         "get_text_auxiliary_client",
         lambda purpose: (object(), "judge-model"),
     )
-    monkeypatch.setattr(
-        goals,
-        "judge_goal",
-        lambda *args, **kwargs: ("continue", "tests are missing", False, None, False),
-    )
+    def _fake_cli_lifecycle_judge(task_text, evidence, *, mode="complete", timeout=None, task_status=None):
+        return ("continue", "tests are missing", False, None, False)
+
+    monkeypatch.setattr(goals, "judge_goal_lifecycle", _fake_cli_lifecycle_judge)
     output = kc.run_slash(f"request-review {cli_task} --summary 'Looks ready.'")
     assert "rejected by judge" in output
     with kbc.connect() as conn:

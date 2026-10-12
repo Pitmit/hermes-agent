@@ -247,12 +247,12 @@ class TestCLIJudgeGate:
             "agent.auxiliary_client.get_text_auxiliary_client",
             lambda name: _aux_client,
         )
-        # Match the real judge_goal contract:
+        # The lifecycle gate calls judge_goal_lifecycle, which keeps the judge_goal contract:
         # (verdict, reason, parse_failed, wait_directive, transport_failed)
-        monkeypatch.setattr(
-            "hermes_cli.goals.judge_goal",
-            lambda **kw: (verdict, reason, False, None, False),
-        )
+        def _fake_lifecycle_judge(task_text, evidence, *, mode="complete", timeout=None, task_status=None):
+            return (verdict, reason, False, None, False)
+
+        monkeypatch.setattr("hermes_cli.goals.judge_goal_lifecycle", _fake_lifecycle_judge)
 
         args = argparse.Namespace(task_ids=["t1"], summary=summary, result=None, metadata=None)
         return _cmd_complete(args), complete_calls
