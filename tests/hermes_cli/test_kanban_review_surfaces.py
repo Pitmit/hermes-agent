@@ -272,6 +272,8 @@ def test_goal_mode_review_handoff_cannot_bypass_judge(
     home = tmp_path / ".hermes"
     home.mkdir()
     monkeypatch.setenv("HERMES_HOME", str(home))
+    # A goal-mode handoff is made by the claiming worker profile.
+    monkeypatch.setenv("HERMES_PROFILE", "builder")
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     kb._INITIALIZED_PATHS.clear()
     kb.init_db()
