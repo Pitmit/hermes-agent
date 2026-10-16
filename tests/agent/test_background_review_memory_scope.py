@@ -141,7 +141,7 @@ class TestConsolidationProposalSurfaces:
         token = set_current_write_origin("background_review")
         try:
             raw = memory_tool(
-                action="replace", old_text="standing rule", content="consolidated entry", store=store)
+                action="patch", old_text="standing rule", content="consolidated entry", store=store)
         finally:
             reset_current_write_origin(token)
         result = json.loads(raw)
@@ -149,8 +149,50 @@ class TestConsolidationProposalSurfaces:
 
         review_messages = [
             {"role": "assistant", "tool_calls": [{"id": "c1", "function": {"name": "memory", "arguments": json.dumps(
-                {"action": "replace", "old_text": "standing rule", "content": "consolidated entry"})}}]},
+                {"action": "patch", "old_text": "standing rule", "content": "consolidated entry"})}}]},
             {"role": "tool", "tool_call_id": "c1", "content": raw},
+        ]
+        actions = bg.summarize_background_review_actions(review_messages, [])
+        assert any("staged for your approval" in a for a in actions)
+
+    def test_near_limit_denial_end_to_end(self, tmp_path, monkeypatch):
+        """add rejected by the budget -> fork follows the 'consolidate now' hint with a
+        patch -> the delete gate stages it -> the proposal surfaces; the store never
+        changed and nothing was silently lost."""
+        import json
+
+        from tools.memory_tool import memory_tool
+        from tools.skill_provenance import set_current_write_origin, reset_current_write_origin
+
+        store = self._store(tmp_path, monkeypatch)
+        monkeypatch.setattr("tools.write_approval.write_approval_enabled", lambda subsystem: True)
+        assert store.add("memory", "seed entry one")["success"] is True
+        assert store.add("memory", "x" * 600)["success"] is False
+
+        token = set_current_write_origin("background_review")
+        try:
+            add_raw = memory_tool(action="add", content="y" * 600, store=store)
+            replace_raw = memory_tool(
+                action="patch", old_text="seed entry one", content="merged entry", store=store)
+        finally:
+            reset_current_write_origin(token)
+        assert json.loads(add_raw)["success"] is False  # the budget still rejects the add
+        replace_result = json.loads(replace_raw)
+        assert replace_result["staged"] is True and replace_result["proposal_staged"] is True
+
+        # Fail-closed: nothing was applied or dropped.
+        assert "seed entry one" in store._entries_for("memory")
+        assert "merged entry" not in store._entries_for("memory")
+
+        review_messages = [
+            {"role": "assistant", "tool_calls": [
+                {"id": "c1", "function": {"name": "memory", "arguments": json.dumps(
+                    {"action": "add", "content": "y" * 600})}},
+                {"id": "c2", "function": {"name": "memory", "arguments": json.dumps(
+                    {"action": "patch", "old_text": "seed entry one", "content": "merged entry"})}},
+            ]},
+            {"role": "tool", "tool_call_id": "c1", "content": add_raw},
+            {"role": "tool", "tool_call_id": "c2", "content": replace_raw},
         ]
         actions = bg.summarize_background_review_actions(review_messages, [])
         assert any("staged for your approval" in a for a in actions)
@@ -172,7 +214,7 @@ class TestConsolidationProposalSurfaces:
         try:
             add_raw = memory_tool(action="add", content="y" * 600, store=store)
             replace_raw = memory_tool(
-                action="replace", old_text="seed entry one", content="merged entry", store=store)
+                action="patch", old_text="seed entry one", content="merged entry", store=store)
         finally:
             reset_current_write_origin(token)
         assert json.loads(add_raw)["success"] is False
