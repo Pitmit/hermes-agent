@@ -51,10 +51,20 @@ from hermes_time import now as _hermes_now
 
 logger = logging.getLogger(__name__)
 
-try:  # croniter is a core dependency but imported lazily everywhere in cron/
-    from croniter import croniter as _croniter_cls
-except Exception:  # pragma: no cover - croniter missing only in broken envs
-    _croniter_cls = None
+def _croniter_cls():
+    """croniter, imported at CALL time — never at module import.
+
+    Importing croniter runs stdlib ``platform.architecture()``'s
+    ``file -b <sys.executable>`` subprocess probe, which must stay out of
+    the kanban dispatcher's spawn window (``_default_spawn`` imports this
+    module lazily via ``cron/jobs.py``; upstream's restart-safe-scope
+    tests count ``Popen`` calls made there). cron/ already imports
+    croniter lazily everywhere else for the same reason."""
+    try:
+        from croniter import croniter
+    except Exception:  # pragma: no cover - croniter missing only in broken envs
+        return None
+    return croniter
 
 #: ``task_events`` kind written on every MATERIALIZED routine occurrence
 #: (provenance: job id, canonical scheduled instant, idempotency key, dispatch
@@ -302,13 +312,14 @@ def previous_instants(
         return out
     if kind == "cron":
         expr = schedule.get("expr")
-        if not expr or _croniter_cls is None:
+        croniter = _croniter_cls()
+        if not expr or croniter is None:
             return []
         from hermes_time import get_timezone
 
         zone = get_timezone() or fired.tzinfo
         base_ts = fired.timestamp()
-        it = _croniter_cls(expr, fired.astimezone(zone).replace(tzinfo=None))
+        it = croniter(expr, fired.astimezone(zone).replace(tzinfo=None))
         for _ in range(count):
             prev_wall = it.get_prev(datetime)
             found = None
