@@ -334,6 +334,39 @@ kanban:
                                    # nothing, and so does an unreadable config.
 ```
 
+### Cost & approval governance
+
+The dispatcher tick carries three optional governance switches. All are off by
+default and only ever gate dispatcher-side or worker-side surfaces — never the
+CLI:
+
+```yaml
+kanban:
+  # Monthly cost budget gate in the dispatcher tick (governance stage 1).
+  budgets:
+    enabled: false               # default: the ledger records run costs, but
+                                  # the pre-claim hard stop stays off.
+    unknown_policy: allow        # 'allow': unknown costs never count toward the
+                                  # hard stop; 'flag': same accounting, plus the
+                                  # unknown share is stamped into budget events.
+  # Human approval gates over stable subjects (governance stage 2). Off keeps
+  # the worker-side kanban_approval_request tool hidden.
+  approvals:
+    enabled: false               # default
+  # Read-only escalation thresholds (governance stage 4/5): advisory only,
+  # they never gate, release or unblock anything.
+  diagnostics:
+    blocked_stale_hours: 24      # default board-wide blocked-SLA ladder
+    approval_stale_hours: 48    # default: ages pending approvals in the same ladder
+```
+
+`kanban.budgets.enabled` arms the pre-claim monthly hard stop (the ledger
+records run costs either way). `kanban.approvals.enabled` surfaces the
+approval tables and the worker-side approval tool.
+`kanban.diagnostics.*` only tune the advisory escalation ladder; a per-task
+`blocked_stale_hours` override lives on the task itself
+(`hermes kanban block-sla`).
+
 Override the config flag at runtime via `HERMES_KANBAN_DISPATCH_IN_GATEWAY=0`
 for debugging. Standard gateway supervision applies: run `hermes gateway
 start` directly, or wire the gateway up as a systemd user unit (see the
