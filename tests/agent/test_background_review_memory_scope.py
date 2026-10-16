@@ -156,9 +156,12 @@ class TestConsolidationProposalSurfaces:
         assert any("staged for your approval" in a for a in actions)
 
     def test_near_limit_denial_end_to_end(self, tmp_path, monkeypatch):
-        """add rejected by the budget -> fork follows the 'consolidate now' hint with a
-        patch -> the delete gate stages it -> the proposal surfaces; the store never
-        changed and nothing was silently lost."""
+        """Approval ON end-to-end: the fork's unattended near-limit add and its
+        consolidation patch both stage as proposals (the foreground write gate
+        stages unattended adds; the background delete gate stages the destructive
+        patch, pinned to the reviewed entry), the store never changed, and both
+        surface through ``summarize_background_review_actions`` — nothing is
+        silently lost."""
         import json
 
         from tools.memory_tool import memory_tool
@@ -176,7 +179,10 @@ class TestConsolidationProposalSurfaces:
                 action="patch", old_text="seed entry one", content="merged entry", store=store)
         finally:
             reset_current_write_origin(token)
-        assert json.loads(add_raw)["success"] is False  # the budget still rejects the add
+        # Approval ON: the unattended near-limit add is not budget-rejected — the
+        # foreground write gate stages it as a proposal instead, so nothing is lost.
+        add_result = json.loads(add_raw)
+        assert add_result["staged"] is True
         replace_result = json.loads(replace_raw)
         assert replace_result["staged"] is True and replace_result["proposal_staged"] is True
 

@@ -973,13 +973,14 @@ class TestBackgroundReviewDeleteGate:
         # Fail-closed: the original entry is untouched.
         assert "entry the fork must not rewrite" in store._entries_for("memory")
 
-    def test_replace_applied_when_write_approval_off(self, store, monkeypatch):
+    def test_patch_applied_when_write_approval_off(self, store, monkeypatch):
         monkeypatch.setattr("tools.write_approval.write_approval_enabled", lambda subsystem: False)
         store.add("memory", "entry the fork may update automatically")
         token = set_current_write_origin("background_review")
         try:
             result = json.loads(memory_tool(
-                action="replace", old_text="entry the fork may", content="updated automatically", store=store))
+                action="patch", old_text="entry the fork may update automatically",
+                content="updated automatically", store=store))
         finally:
             reset_current_write_origin(token)
         assert result["success"] is True
