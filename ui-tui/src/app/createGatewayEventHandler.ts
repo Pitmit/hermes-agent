@@ -48,7 +48,7 @@ import { flashGoodVibes, flashPet } from './petFlashStore.js'
 import { forgetServerRequest } from './serverRequestStore.js'
 import { noteCanonicalCompletion } from './slash/canonicalSessionCommands.js'
 import { mutateCanonicalSession, openModelConfirmation } from './slash/canonicalSessionControls.js'
-import { loadSlashCatalog } from './slashCatalog.js'
+import { loadSlashCatalog, refreshSlashCatalogOnSkillsChange } from './slashCatalog.js'
 import { reportStartupLatency } from './startupLatency.js'
 import { markNextSubmitVoice } from './submissionCore.js'
 import { captureDestination, isCurrentDestination } from './submissionDestination.js'
@@ -1041,6 +1041,33 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
       })
   }
 
+  type NoticeEventPayload = Extract<AnyGatewayEvent, { type: 'notification.show' }>['payload']
+
+  const showGatewayNotice = (p: NoticeEventPayload) => {
+    if (!p?.text) {
+      return
+    }
+
+    // A notice with a full question (the low-disk auto-prune prompt) prints it into the
+    // transcript once: the status slot is one truncated line and would drop the commands.
+    if (typeof p.detail === 'string' && p.detail.trim()) {
+      sys(p.detail)
+    }
+
+    turnController.showNotice({
+      id: p.id ?? undefined,
+      key: p.key ?? undefined,
+      kind: p.kind === 'ttl' ? 'ttl' : 'sticky',
+      level: isNoticeLevel(p.level) ? p.level : 'info',
+      text: p.text,
+      ttl_ms: p.ttl_ms ?? null
+    })
+  }
+
+  // Shared-control settles and the skills.changed catalog refetch need no per-event state.
+  const handledBeforeSwitch = (ev: AnyGatewayEvent) =>
+    settleSharedPrompt(ev) || refreshSlashCatalogOnSkillsChange(ev, rpc, setCatalog)
+
   return (ev: AnyGatewayEvent) => {
     const sid = getUiState().sid
 
@@ -1055,7 +1082,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
       return
     }
 
-    if (settleSharedPrompt(ev)) {
+    if (handledBeforeSwitch(ev)) {
       return
     }
 
@@ -1216,20 +1243,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
         // wire and stays snake_case in UiState.notice (no mapping layer). The
         // text already carries its own glyph; turnController decides whether to
         // show now or hold until turn end (FaceTicker wins while busy).
-        const p = ev.payload
-
-        if (!p?.text) {
-          return
-        }
-
-        turnController.showNotice({
-          id: p.id ?? undefined,
-          key: p.key ?? undefined,
-          kind: p.kind === 'ttl' ? 'ttl' : 'sticky',
-          level: isNoticeLevel(p.level) ? p.level : 'info',
-          text: p.text,
-          ttl_ms: p.ttl_ms ?? null
-        })
+        showGatewayNotice(ev.payload)
 
         return
       }

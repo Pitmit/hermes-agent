@@ -1423,7 +1423,7 @@ export function useMainApp(gw: GatewayClient) {
       patchUiState({ status: t('session.status.closingSession') })
 
       try {
-        const result = (await session.closeSession(id)) as null | SessionCloseResponse
+        const result = (await session.closeLiveView(id)) as null | SessionCloseResponse
         patchUiState({ status: 'ready' })
 
         return result
