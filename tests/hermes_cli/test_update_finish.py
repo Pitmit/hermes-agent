@@ -49,6 +49,15 @@ def completion(tmp_path, monkeypatch):
                         ignore=shutil.ignore_patterns("__pycache__", "web_dist", "tui_dist"))
     shutil.copytree(ROOT / "scripts/build", source / "scripts/build",
                     ignore=shutil.ignore_patterns("__pycache__"))
+    # The TUI product build ships runtime Python helpers from ui-tui/scripts
+    # (scripts/build/tui.mjs copies them into dist/scripts); the synthetic
+    # ui-tui workspace that _npm_graph creates has no scripts/, and without
+    # these files every product build in the sandbox dies in cpSync after
+    # esbuild already succeeded.
+    helpers = source / "ui-tui" / "scripts"
+    helpers.mkdir(parents=True)
+    for name in ("gateway_bootstrap.py", "clipboard_image.py"):
+        shutil.copy2(ROOT / "ui-tui" / "scripts" / name, helpers / name)
     _put(source, "pyproject.toml", '[project]\nname="takeover-fixture"\nversion="2.0"\n')
     # Successful completion stamps the selected checkout's own git identity.
     git_env = {**os.environ, "GIT_AUTHOR_NAME": "fixture", "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
