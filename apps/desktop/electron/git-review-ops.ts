@@ -8,10 +8,10 @@ import { execFile } from 'node:child_process'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-import simpleGit from 'simple-git'
+import { simpleGit } from 'simple-git'
 
 import { resolveRequestedPathForIpc } from './hardening'
-import { execGit, noConsoleGitEnv, simpleGitBinary, windowsGitHost } from './no-console-git'
+import { execGit, gitSpawnEnv, simpleGitBinary, windowsGitHost, windowsShortPath } from './no-console-git'
 
 const COMMIT_CONTEXT_DIFF_MAX_CHARS = 120_000
 const COMMIT_CONTEXT_UNTRACKED_MAX = 80
@@ -19,16 +19,19 @@ const REVIEW_FILE_CAP = 2_000
 const UNTRACKED_LINE_COUNT_CONCURRENCY = 16
 const UNTRACKED_LINE_COUNT_MAX_BYTES = 1024 * 1024
 
-// simple-git 3.x validates a custom binary path against an ASCII whitelist —
-// `isBadArgument` in node_modules/simple-git/dist/cjs/index.js accepts only
-// `/^([a-z]:)?([a-z0-9/.\_~-]+)$/i`. Everything outside it is "restricted": a
+// simple-git 4.x validates a custom binary path against an ASCII whitelist —
+// everything outside `/^([a-z]:)?([a-z0-9/.\_~-]+)$/i` is "restricted": a
 // space in the default `C:\Program Files\Git\...`, the parentheses in
-// `Program Files (x86)`, the accented user name in `C:\Users\João\...`. Without
-// the escape hatch simple-git THROWS on such a path; with it, it console.warns
-// this exact message — the flag only downgrades the throw. Exported so gitFor
-// and its tests share one source of truth.
-export const SIMPLE_GIT_UNSAFE_BINARY_WARN =
-  'Invalid value supplied for custom binary, restricted characters must be removed or supply the unsafe.allowUnsafeCustomBinary option'
+// `Program Files (x86)`, the accented user name in `C:\Users\João\...`.
+// simple-git 4.x refuses such a path unless `unsafe.allowUnsafeCustomBinary`
+// is set; the product deliberately does NOT set it (owner decision 2026-10-18:
+// no unsafe opt-outs). A restricted path is converted to its Windows short
+// (8.3) form when possible, and otherwise FAILS CLOSED with this error — never
+// silently downgraded to a PATH lookup, which could resolve a repo-local
+// git.exe.
+export const SIMPLE_GIT_BINARY_ALLOWANCE = /^([a-z]:)?([a-z0-9/.\\_~-]+)$/i
+export const SIMPLE_GIT_BINARY_REFUSED =
+  'Refusing a custom git binary path with restricted characters: the resolved path is not whitelist-clean and could not be converted to a short path; pass a clean path instead'
 
 // GUI-launched Electron apps on macOS inherit only a minimal PATH (no
 // /opt/homebrew/bin or /usr/local/bin), so `gh` — and the `git` gh shells out
@@ -56,62 +59,85 @@ function runGh(args, cwd, ghBin): Promise<{ ok: boolean; stdout: string; stderr:
   })
 }
 
+// A binary path (single string or [python, host-script] tuple element) that
+// passes simple-git 4.x's ASCII whitelist without the unsafe custom-binary
+// hatch.
+function elementClean(target: string): boolean {
+  return SIMPLE_GIT_BINARY_ALLOWANCE.test(target)
+}
+
+// Convert a restricted binary path element to a whitelist-clean form when the
+// platform can: on Windows the short (8.3) form, via the resolved python host
+// binary (see windowsShortPath — never a shell string interpolation). Where no
+// conversion exists the element is returned unchanged and the caller FAILS
+// CLOSED instead of downgrading to a PATH lookup (which could resolve a
+// repo-local git.exe).
+function allowanceClean(target: string, pythonBin: string): string {
+  if (elementClean(target)) {
+    return target
+  }
+  return process.platform === 'win32' ? windowsShortPath(target, pythonBin) : target
+}
+
 function gitFor(cwd, gitBin) {
   // `gitBin` is resolved inside the Electron main process from known install
   // locations or PATH — never renderer/user input, and the Windows tuple below is
   // built there too: `gitBin` is the resolved install/path and the python host is
-  // this process's own interpreter. simple-git's ASCII whitelist accepts
-  // backslashes but rejects every character outside it — the space in the default
-  // `C:\Program Files\Git\cmd\git.exe`, the parentheses in `Program Files (x86)`,
-  // the accent in `C:\Users\João\...` — and without the escape hatch it THROWS
-  // inside the factory, silently breaking the Review pane. Key the hatch on "we
-  // resolved this binary ourselves", not on a `/\s/` guess, which still throws for
-  // every other restricted character. Falling back to PATH instead is not an
-  // option (often absent in GUI-launched apps, and a PATH lookup could resolve a
-  // repo-local git.exe).
+  // this process's own interpreter. simple-git 4.x THROWS on a binary path
+  // outside its ASCII whitelist unless `unsafe.allowUnsafeCustomBinary` is set;
+  // the product does not set it (owner decision 2026-10-18: no unsafe opt-outs).
+  // A restricted path is converted to its Windows short form when possible and
+  // otherwise FAILS CLOSED — reads degrade to null/empty on a non-repo, and
+  // mutations reject, so the Review pane surfaces the refusal instead of
+  // silently downgrading to a PATH lookup (often absent in GUI-launched apps,
+  // and a PATH lookup could resolve a repo-local git.exe).
   // On Windows the binary tuple is [python.exe, host script]. simple-git has no
   // creationFlags slot; the script spawns the real git with CREATE_NO_WINDOW and
   // forwards argv unchanged.
   const host = windowsGitHost()
-  const binary = simpleGitBinary(gitBin, host)
-  const unsafe = Boolean(gitBin) || Array.isArray(binary)
+  const requested = simpleGitBinary(gitBin, host)
+  // The tuple path always has a resolved python host binary; a Windows
+  // string binary without one cannot convert and fails closed below.
+  const pythonBin = Array.isArray(requested) ? requested[0] : ''
 
-  const makeGit = () =>
-    simpleGit({
-      baseDir: cwd,
-      binary,
-      maxConcurrentProcesses: 4,
-      trimmed: false,
-      ...(unsafe ? { unsafe: { allowUnsafeCustomBinary: true } } : {})
-    })
+  const binary: string | [string, string] = Array.isArray(requested)
+    ? [allowanceClean(requested[0], pythonBin), allowanceClean(requested[1], pythonBin)]
+    : allowanceClean(requested, pythonBin)
 
-  if (!unsafe) {
-    return makeGit()
+  const clean = Array.isArray(binary)
+    ? binary.every(element => elementClean(element))
+    : elementClean(binary)
+  if (!clean) {
+    throw new Error(SIMPLE_GIT_BINARY_REFUSED)
   }
 
-  // With the escape hatch set, simple-git still console.warns that same message on
-  // every factory call — the flag only downgrades the throw to a warning. The
-  // binary was resolved by this process, never supplied by the renderer, so on
-  // Windows (where the standard git lives under a spaced "Program Files") that
-  // warning is pure console spam. Filter exactly that message, for the
-  // synchronous factory call only.
-  const originalWarn = console.warn
+  const git = simpleGit({
+    baseDir: cwd,
+    binary,
+    maxConcurrentProcesses: 4,
+    trimmed: false,
+    // simple-git 4.0.2 environment guard (measured): `allowEnvironment`
+    // governs GIT-class names (`GIT_*` plus its built-in danger list) —
+    // ambient names outside the list are stripped from every spawn, and a
+    // GIT-class name set through the executor env must be listed or the
+    // wrapper throws. The product's git functions need exactly one name to
+    // flow: GIT_TERMINAL_PROMPT, the prompt guard gitSpawnEnv sets on the
+    // Windows host tuple path and the caller may set on the ambient path. A
+    // blanket allow-all or a full process.env copy is forbidden for this
+    // product path (owner decision 2026-10-18), and ambient GIT_* names
+    // beyond this list — a user-set GIT_SSH_COMMAND or GIT_PAGER, say — are
+    // now stripped by the native guard, an upstream security posture the
+    // product deliberately keeps (documented in RCA.md).
+    allowEnvironment: ['GIT_TERMINAL_PROMPT']
+  })
 
-  console.warn = (message?: unknown, ...rest: unknown[]) => {
-    if (typeof message !== 'string' || !message.startsWith(SIMPLE_GIT_UNSAFE_BINARY_WARN)) {
-      originalWarn(message, ...rest)
-    }
-  }
-
-  try {
-    const git = makeGit()
-
-    return Array.isArray(binary) ? git.env(noConsoleGitEnv(process.env, gitBin || 'git')) : git
-  } finally {
-    console.warn = originalWarn
-  }
+  // On Windows the no-console host tuple spawns the real git through the host
+  // script, so the executor env must carry the prompt guard and the argv0
+  // marker — built from the allowlist (see gitSpawnEnv), never copied from the
+  // whole process.env, whose ambient GIT_EDITOR/GIT_PAGER-class variables the
+  // host path would otherwise forward.
+  return Array.isArray(binary) ? git.env(gitSpawnEnv(process.env, gitBin || 'git')) : git
 }
-
 // simple-git reports renames as `old => new` (and `dir/{old => new}/f`); resolve
 // to the NEW path so the row addresses the real file for diff/stage.
 function resolveRenamePath(raw) {

@@ -201,6 +201,109 @@ export function planNoConsoleGitSpawn({
   }
 }
 
+// simple-git 4.0.2's environment guard (`allowEnvironment`, measured against
+// the exact installed package) governs only GIT-class names — `GIT_*` prefixed
+// plus its built-in danger list (EDITOR, VISUAL, PAGER, GIT_EDITOR,
+// GIT_SSH_COMMAND, GIT_CONFIG*, SSH_ASKPASS, ...): ambient GIT-class names NOT
+// in the option's list are stripped from every spawn, and a GIT-class name set
+// through the executor env (`.env()`) must be listed or the wrapper THROWS.
+// Non-GIT ambient names pass through that guard untouched on the ambient path.
+// The product lists exactly one name there (`GIT_TERMINAL_PROMPT`, see
+// git-review-ops); the list below is a second, separate mechanism: it is the
+// executor-env replacement set for the Windows no-console host tuple, where the
+// executor env REPLACES the whole inherited environment (measured: with an
+// executor env set, the child receives only the executor values). Every entry
+// is a name python.exe and the hosted git need — every entry is named and
+// justified; adding a name here is a product decision. Deliberately NOT copied
+// from the caller's environment: ambient GIT_* names (the guard strips the
+// dangerous ones on the ambient path anyway), credentials, tokens, secrets.
+export const GIT_ENV_ALLOWLIST: readonly string[] = [
+  // identity + config discovery (global .gitconfig, ~/.config/git)
+  'home',
+  // executables: ssh, credential helpers, hooks resolved through PATH
+  'path',
+  // ssh agent socket (Windows pageant too) for pushed/fetched remotes
+  'ssh_auth_sock',
+  // XDG config location when it is not the default under HOME
+  'xdg_config_home',
+  // commit/log date formatting
+  'tz',
+  // git's own message/locale handling
+  'lang', 'lc_all', 'lc_ctype', 'lc_messages',
+  // TLS trust overrides (CI runners), git https verification
+  'ssl_cert_file', 'ssl_cert_dir',
+  // corporate proxies for https remotes (git/curl read all four spellings)
+  'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy',
+  // Windows: the Win32 CRT requires SYSTEMROOT; identity/GCM resolves through
+  // USERPROFILE/HOMEDRIVE+HOMEPATH/APPDATA; PROGRAMFILES/ComSpec/PATHEXT are
+  // needed to spawn credential managers and helpers.
+  'systemroot', 'systemdrive', 'userprofile', 'homedrive', 'homepath',
+  'appdata', 'localappdata', 'programdata', 'programfiles', 'comspec',
+  'pathext'
+]
+
+// Windows short (8.3) path conversion for simple-git's ASCII binary whitelist,
+// memoized per target. GetShortPathNameW is the only whitelist-clean
+// representation of a restricted path (e.g. `C:\Program Files\...` becomes
+// `C:\PROGRA~1\...`) that does NOT need `unsafe.allowUnsafeCustomBinary`
+// (owner decision 2026-10-18: no unsafe opt-outs). Called with the resolved
+// python host binary's path and the target as separate argv elements —
+// `cmd.exe` string interpolation would open a new shell-injection path, so the
+// conversion runs through python's ctypes instead. When the volume has 8dot3
+// names disabled GetShortPathNameW returns the long path unchanged (or 0 when
+// it cannot), so the caller keeps the restricted path and FAILS CLOSED; the
+// conversion never upgrades a refused path to a PATH lookup (which could
+// resolve a repo-local git.exe).
+const WINDOWS_SHORT_PATH_CACHE = new Map<string, string>()
+const WINDOWS_SHORT_PATH_CTYPE = `import ctypes, sys
+buf = ctypes.create_unicode_buffer(4096)
+rc = ctypes.windll.kernel32.GetShortPathNameW(sys.argv[1], buf, 4096)
+sys.stdout.write(buf.value if rc else "")
+`
+
+export function windowsShortPath(target: string, pythonBin: string): string {
+  const cached = WINDOWS_SHORT_PATH_CACHE.get(target)
+  if (cached !== undefined) {
+    return cached
+  }
+
+  const short = execFileSync(pythonBin, ['-c', WINDOWS_SHORT_PATH_CTYPE, target], {
+    windowsHide: true,
+    encoding: 'utf8'
+  }).trim()
+
+  if (short !== target) {
+    WINDOWS_SHORT_PATH_CACHE.set(target, short)
+  }
+
+  return short
+}
+
+// The executor env a spawned git receives on the Windows no-console host
+// tuple: exactly the allowlist names valued from the caller's environment,
+// plus the argv0 marker and the terminal prompt guard. A set executor env
+// REPLACES the whole inherited environment (measured against simple-git
+// 4.0.2), so this is where the no-console path stops forwarding secrets —
+// copying the full process.env here would both leak ambient
+// GIT_EDITOR/GIT_PAGER-class variables into the host script's throw path and
+// pass every secret in the process to each spawned git. GIT_TERMINAL_PROMPT
+// is allowlisted for simple-git's guard (a GIT-class name in an executor env
+// must be listed or the wrapper throws) and keeps its caller-set value, only
+// defaulting to the no-prompt guard when unset — matching the old
+// noConsoleGitEnv behavior.
+export function gitSpawnEnv(base: NodeJS.ProcessEnv | undefined, gitBin: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {}
+  for (const name of GIT_ENV_ALLOWLIST) {
+    const value = base?.[name] ?? base?.[name.toUpperCase()]
+    if (value !== undefined) {
+      env[name.toUpperCase()] = value
+    }
+  }
+  env.GIT_TERMINAL_PROMPT = base?.GIT_TERMINAL_PROMPT ?? base?.git_terminal_prompt ?? '0'
+  env.HERMES_GIT_ARGV0 = JSON.stringify(gitBin || 'git')
+  return env
+}
+
 export function simpleGitBinary(
   gitBin: string | undefined,
   host?: { isWindows: boolean; pythonBin?: string | null; scriptPath?: string | null } | null
