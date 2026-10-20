@@ -90,6 +90,26 @@ def test_canary_cut_keeps_the_stable_core_and_dispatches_exactly_once(canary_rep
                    for call in calls)
 
 
+def test_oversized_compact_notes_fail_before_tag_push(canary_repo, monkeypatch):
+    git, remote, calls = canary_repo
+    git("commit", "--allow-empty", "-qm", "feat: first canary")
+    tag = "v1.2.3+canary.20260818T103000Z"
+    args = SimpleNamespace(
+        date="20260818T103000Z", publish=True, no_changelog=False, remote="origin"
+    )
+    monkeypatch.setattr(
+        release, "generate_changelog",
+        lambda *_args, **_kwargs: "x" * (release.GITHUB_RELEASE_BODY_MAX_CHARS + 1),
+    )
+
+    with pytest.raises(ValueError, match="Compacted canary release notes exceed"):
+        release.cmd_canary(args)
+
+    assert tag not in git("tag", "--list").splitlines()
+    assert tag not in git("--git-dir", str(remote), "tag", "--list").splitlines()
+    assert calls == []
+
+
 def test_unchanged_head_does_not_cut_another_timestamp(canary_repo):
     git, _remote, calls = canary_repo
     git("commit", "--allow-empty", "-qm", "stable")
