@@ -19,7 +19,7 @@
  *   node bridge.js --port 3000 --session ~/.hermes/whatsapp/session
  */
 
-import { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, downloadMediaMessage, getAggregateVotesInPollMessage, decryptPollVote, getKeyAuthor, jidNormalizedUser } from '@whiskeysockets/baileys';
+import { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, fetchLatestWaWebVersion, Browsers, downloadMediaMessage, getAggregateVotesInPollMessage, decryptPollVote, getKeyAuthor, jidNormalizedUser } from '@whiskeysockets/baileys';
 import express from 'express';
 import { Boom } from '@hapi/boom';
 import pino from 'pino';
@@ -400,18 +400,29 @@ function emitPairEvent(event) {
 }
 
 const scheduleReconnect = createReconnectScheduler(() => startSocket());
-const getWAVersion = createVersionResolver(fetchLatestBaileysVersion);
+// PSCS: prefer the live WhatsApp Web build (web.whatsapp.com) over Baileys' repo list, which lagged
+// behind (2.3000.1043857760 vs live 2.3000.1051302048 on 2026-10-22) while linking was refused.
+async function fetchPreferredWAVersion() {
+  try {
+    const live = await fetchLatestWaWebVersion({});
+    if (live?.version && !live.error) return live;
+  } catch {}
+  return fetchLatestBaileysVersion();
+}
+const getWAVersion = createVersionResolver(fetchPreferredWAVersion);
 
 async function startSocket() {
   const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
   const version = await getWAVersion();
+  emitPairEvent({ event: 'wa_version', version });
 
   sock = makeWASocket({
     ...(version ? { version } : {}),
     auth: state,
     logger,
     printQRInTerminal: false,
-    browser: ['Hermes Agent', 'Chrome', '120.0'],
+    // PSCS: standard Baileys companion identity instead of the custom 'Hermes Agent'/Chrome 120.
+    browser: Browsers.macOS('Chrome'),
     syncFullHistory: false,
     markOnlineOnConnect: false,
     // Required for Baileys 7.x: without this, incoming messages that need
