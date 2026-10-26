@@ -11,7 +11,6 @@ from . import (
     events,
     groups_bot_relay,
     i18n,
-    kanban_activity,
     liveness,
     machine,
     profiles_vault_complete_foreign_subagents,
