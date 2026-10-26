@@ -560,69 +560,6 @@ export interface RollbackRestoreResponse {
   success?: boolean
 }
 
-// ── Kanban activity ──────────────────────────────────────────────────
-
-export type KanbanTaskStatus =
-  | 'archived'
-  | 'blocked'
-  | 'done'
-  | 'ready'
-  | 'review'
-  | 'running'
-  | 'scheduled'
-  | 'todo'
-  | 'triage'
-export type KanbanRunOutcome = string
-
-export interface KanbanActivityRun {
-  ended_at: null | number
-  last_heartbeat_at: null | number
-  max_runtime_seconds: null | number
-  outcome: KanbanRunOutcome | null
-  profile: null | string
-  run_id: number
-  started_at: null | number
-  // Structured progress of the last kanban_heartbeat (governance P1-B1).
-  // Optional: backends before P1-B1 (and legacy board DBs) omit them;
-  // absent/unknown is null, never invented.
-  phase?: null | string
-  completed?: null | number
-  total?: null | number
-  unit?: null | string
-  rate?: null | number
-  eta_seconds?: null | number
-  error_count?: null | number
-  progress_pct?: null | number
-  progress_updated_at?: null | number
-}
-
-export interface KanbanActivityTask {
-  assignee: null | string
-  block_reason: null | string
-  children: KanbanActivityTask[]
-  parents: string[]
-  run: KanbanActivityRun | null
-  status: KanbanTaskStatus
-  task_id: string
-  title: string
-}
-
-export interface KanbanActivityBoard {
-  board: string
-  checked_at: number
-  error?: string
-  roots: KanbanActivityTask[]
-  truncated?: boolean
-}
-
-export interface KanbanActivityResponse {
-  active_count: number
-  attention_count: number
-  boards: KanbanActivityBoard[]
-  checked_at: number
-  diagnostics?: string[]
-}
-
 // ── Delegation control RPCs ──────────────────────────────────────────
 
 export interface DelegationStatusResponse {

@@ -21,7 +21,7 @@ import { hasLeadGap, prevRenderedMsg } from '../domain/blockLayout.js'
 import { SECTION_NAMES, sectionMode } from '../domain/details.js'
 import { composeTabTitle, fmtProjectCwdBranch, shortCwd } from '../domain/paths.js'
 import { type GatewayClient } from '../gatewayClient.js'
-import type { KanbanActivityResponse, SubagentListResponse } from '../gatewayTypes.js'
+import type { SubagentListResponse } from '../gatewayTypes.js'
 import type {
   AnyGatewayEvent,
   ClarifyLockResponse,
@@ -54,7 +54,6 @@ import { createSlashHandler } from './createSlashHandler.js'
 import { planGatewayRecovery } from './gatewayRecovery.js'
 import { getInputSelection } from './inputSelectionStore.js'
 import { type GatewayRpc, type SlashHandler, type StateSetter, type TranscriptRow, type UiState } from './interfaces.js'
-import { applyKanbanActivity } from './kanbanRoster.js'
 import { requestLiveSessions } from './liveSessions.js'
 import { applyControlSnapshot } from './loopStatus.js'
 import { $overlayState, capturePromptResponseGuard, hasSensitivePrompt, patchOverlayState } from './overlayStore.js'
@@ -695,7 +694,6 @@ export function useMainApp(gw: GatewayClient) {
     let stopped = false
     applyAgentSnapshot(ui.sid)
     applyProcessSnapshot(ui.sid)
-    applyKanbanActivity()
     applyControlSnapshot(ui.sid)
     // Goal/loop state changes only on their slash commands, a judged turn or a loop wakeup, all of which push
     // `session.control.update`; read it once per session instead of polling state.db.
@@ -727,15 +725,6 @@ export function useMainApp(gw: GatewayClient) {
 
           if (!stopped && result && getUiState().sid === sid) {
             applyProcessSnapshot(sid, result.processes ?? [])
-          }
-        })
-        .catch(() => {})
-      gw.request<KanbanActivityResponse>('kanban.activity', {})
-        .then(raw => {
-          const result = asRpcResult<KanbanActivityResponse>(raw)
-
-          if (!stopped && result) {
-            applyKanbanActivity(result)
           }
         })
         .catch(() => {})

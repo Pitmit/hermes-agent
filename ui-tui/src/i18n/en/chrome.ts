@@ -44,7 +44,7 @@ export const chromeEn = {
     arrows: 'completions / queue edit / history',
     sessionSwitcher: 'open live session switcher (deletes queued message while editing)',
     expandAgents: 'expand live agents (keeps your draft)',
-    collapseAgents: 'collapse / restore activity docks',
+    collapseAgents: 'collapse / restore live agent preview',
     modelPicker: 'open model picker (keeps your draft; applies to next turn mid-stream)',
     homeEnd: 'home / end of line',
     undoRedo: 'undo / redo input edits',
