@@ -13,19 +13,28 @@ from hermes_cli.kanban_db_connect import connect
 
 @pytest.fixture
 def github(tmp_path, monkeypatch):
-    state = {"conclusion": "success", "head": "a" * 40, "reads": 0, "requests": []}
+    state = {"conclusion": "success", "head": "a" * 40, "reads": 0, "requests": [],
+             "branch_protection": True, "rules_error": None}
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             state["requests"].append(self.path)
             sha = state["head"]
+            status = 200
             if self.path == "/graphql":
+                protection = {"requiredStatusChecks": [
+                    {"context": "required", "app": {"databaseId": 1}}]}
                 value = {"data": {"repository": {"pullRequest": {
                     "headRefOid": sha, "baseRefName": "main", "state": "OPEN",
-                    "baseRef": {"branchProtectionRule": {"requiredStatusChecks": [
-                        {"context": "required", "app": {"databaseId": 1}}]}}}}}}
+                    "baseRef": {"branchProtectionRule": protection if state["branch_protection"] else None}}}}}
             elif "/rules/branches/" in self.path:
-                value = [[]]
+                if state["rules_error"]:
+                    status = 403
+                    message = ("Upgrade to GitHub Pro or make this repository public to enable this feature."
+                               if state["rules_error"] == "plan" else "Resource not accessible by integration")
+                    value = {"message": message, "status": "403"}
+                else:
+                    value = [[]]
             elif "/check-runs" in self.path:
                 run = {"id": 42, "name": "required", "head_sha": sha,
                        "app": {"id": 1}, "status": "in_progress" if state["conclusion"] == "pending" else "completed", "conclusion": state["conclusion"],
@@ -47,7 +56,7 @@ def github(tmp_path, monkeypatch):
             else:
                 self.send_error(404)
                 return
-            self.send_response(200)
+            self.send_response(status)
             self.end_headers()
             self.wfile.write(json.dumps(value).encode())
 
@@ -60,9 +69,10 @@ def github(tmp_path, monkeypatch):
     shim = tmp_path / "bin"
     shim.mkdir()
     gh = shim / "gh"
-    gh.write_text(f"#!{sys.executable}\nimport sys,urllib.request\n"
+    gh.write_text(f"#!{sys.executable}\nimport sys,urllib.request,urllib.error\n"
                   f"u='http://127.0.0.1:{server.server_port}/'+sys.argv[2]\n"
-                  "print(urllib.request.urlopen(u).read().decode())\n")
+                  "try:\n print(urllib.request.urlopen(u).read().decode())\n"
+                  "except urllib.error.HTTPError as e:\n print(e.read().decode())\n raise SystemExit(1)\n")
     gh.chmod(0o755)
     monkeypatch.setenv("PATH", str(shim) + os.pathsep + os.environ["PATH"])
     monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
@@ -347,3 +357,42 @@ def test_assigned_card_with_unresolvable_profile_is_auth_not_ambient(tmp_path, m
             "SELECT payload FROM task_events WHERE task_id=? AND kind='pr_acceptance'", (tid,)).fetchone()[0])
     assert receipt["classification"] == "auth"
     assert "'ghost'" in receipt["detail"] and "cannot be resolved" in receipt["detail"]
+
+
+@pytest.mark.platforms("linux")
+def test_plan_limited_private_repo_reports_missing_required_checks(github):
+    with connect() as conn:
+        github.update(branch_protection=False, rules_error="plan")
+        tid = kb.create_task(conn, title="Private free plan", completion_contract="acme/repo")
+        assert not kb.complete_task(conn, tid, result="done",
+                                    metadata={"published_pr": "https://github.com/acme/repo/pull/7"})
+        receipt = json.loads(conn.execute(
+            "SELECT payload FROM task_events WHERE task_id=? AND kind='pr_acceptance' ORDER BY id DESC",
+            (tid,)).fetchone()[0])
+        assert receipt["classification"] == "missing"
+        assert receipt["required"] == []
+        assert receipt["checks"] == []
+        assert "No repository-required checks" in receipt["detail"]
+
+        # A plan-limited rules endpoint must not erase required checks that
+        # GraphQL branch protection already declared.
+        github.update(branch_protection=True, rules_error="plan", conclusion="success")
+        tid = kb.create_task(conn, title="Protected private repo", completion_contract="acme/repo")
+        assert kb.complete_task(conn, tid, result="done",
+                                metadata={"published_pr": "https://github.com/acme/repo/pull/7"})
+        receipt = json.loads(conn.execute(
+            "SELECT payload FROM task_events WHERE task_id=? AND kind='pr_acceptance' ORDER BY id DESC",
+            (tid,)).fetchone()[0])
+        assert receipt["classification"] == "success"
+        assert receipt["required"] == [{"context": "required", "app_id": 1}]
+        assert receipt["checks"][0]["id"] == 42
+
+        github["branch_protection"] = False
+        github["rules_error"] = "permission"
+        tid = kb.create_task(conn, title="Unknown permission failure", completion_contract="acme/repo")
+        assert not kb.complete_task(conn, tid, result="done",
+                                    metadata={"published_pr": "https://github.com/acme/repo/pull/7"})
+        receipt = json.loads(conn.execute(
+            "SELECT payload FROM task_events WHERE task_id=? AND kind='pr_acceptance' ORDER BY id DESC",
+            (tid,)).fetchone()[0])
+        assert receipt["classification"] == "infra"

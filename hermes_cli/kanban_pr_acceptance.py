@@ -14,6 +14,7 @@ import json
 import re
 import subprocess
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote
 
 _REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
@@ -29,7 +30,7 @@ def validate_contract(value: str | None) -> str:
 
 
 def _api(endpoint: str, *, query: str | None = None, paginate: bool = False,
-         profile_home: str | None = None):
+         profile_home: str | None = None, allow_plan_limited_feature: bool = False) -> Any:
     command = ["gh", "api", endpoint, "--hostname", "github.com"]
     if query is not None:
         command += ["-f", "query=" + query]
@@ -40,6 +41,14 @@ def _api(endpoint: str, *, query: str | None = None, paginate: bool = False,
                                 text=True, encoding="utf-8", errors="replace", timeout=30,
                                 check=True, env=_gh_env(profile_home))
     except subprocess.CalledProcessError as exc:
+        if allow_plan_limited_feature:
+            try:
+                error = json.loads(exc.stdout or "")
+            except (TypeError, ValueError):
+                error = None
+            if isinstance(error, dict) and str(error.get("status")) == "403" and \
+                    error.get("message") == "Upgrade to GitHub Pro or make this repository public to enable this feature.":
+                return []
         # 401/403/404 = the login cannot see this repository (wrong profile identity
         # or missing grant), not a transient API failure. Persist only the status
         # code + endpoint, never gh's stderr (credentials/host details).
@@ -165,7 +174,7 @@ def collect_acceptance(contract: str, published_pr: str | None,
         protection = (pr.get("baseRef") or {}).get("branchProtectionRule") or {}
         required = {(r["context"], (r.get("app") or {}).get("databaseId")) for r in protection.get("requiredStatusChecks", [])}
         rules = _api(f"repos/{repo}/rules/branches/{quote(branch, safe='')}?per_page=100",
-                     paginate=True, profile_home=profile_home)
+                     paginate=True, profile_home=profile_home, allow_plan_limited_feature=True)
         for page in rules:
             for rule in page:
                 if rule["type"] == "required_status_checks":
