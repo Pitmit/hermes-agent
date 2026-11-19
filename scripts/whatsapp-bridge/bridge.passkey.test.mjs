@@ -22,6 +22,7 @@ test('bridge distinguishes interactive pairing failure from a non-retryable gate
         return { state: { creds }, saveCreds() {} };
       }
       export async function fetchLatestBaileysVersion() { return { version: [2, 3000, 1] }; }
+      export async function fetchLatestWaWebVersion() { return { version: [2, 3000, 1] }; }
       export function makeWASocket({ auth }) {
         const socket = { ev: new EventEmitter(), ws: new EventEmitter(), authState: auth };
         setImmediate(() => {
