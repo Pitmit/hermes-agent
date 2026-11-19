@@ -53,6 +53,7 @@ test('bridge.js serves /auth-proof openly and puts every other route behind the 
         return { state: { creds }, saveCreds() {} };
       }
       export async function fetchLatestBaileysVersion() { return { version: [2, 3000, 1] }; }
+      export async function fetchLatestWaWebVersion() { return { version: [2, 3000, 1] }; }
       export function makeWASocket({ auth }) {
         const record = (kind) => appendFileSync(${JSON.stringify(sentFile)}, kind + '\\n');
         const socket = {
